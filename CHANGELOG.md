@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.4.00] - 2025-01-17
+## [1.3.00] - 2025-01-17
 ### Added
 - `testCreateDuplicateEvents`関数を追加し、重複イベントの作成を自動化。
 - `testDuplicateEventsWorkflow`関数を追加し、重複イベントの作成と削除を一連の流れでテスト可能に。
