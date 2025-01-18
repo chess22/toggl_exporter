@@ -1,13 +1,16 @@
-# Changelog
+# CHANGELOG
 
-## [1.3.00] - 2025-01-17
-### Added
-- `testCreateDuplicateEvents`関数を追加し、重複イベントの作成を自動化。
-- `testDuplicateEventsWorkflow`関数を追加し、重複イベントの作成と削除を一連の流れでテスト可能に。
+## [1.4.00] - 2025-01-18
+### Added / 追加
+- **Initial 30-day fetch**:
+  - When no cache is found (first run), fetch 30 days of Toggl entries.
+  - キャッシュが無い場合に30日分のTogglエントリを取得。
 
-### Modified
-- `testRecordActivityLog`関数を修正し、テストイベントの開始時刻を現在時刻から1時間後、終了時刻を2時間後に設定。
-- ヘッダーコメントに`modified by: chess`を追加。
+### Changed / 変更
+- **1-day overlap**:
+  - On subsequent runs, fetch from (previous stop time - 1 day) to now.
+  - 2回目以降は「前回停止時刻 - 1日」から現在までを再取得し、過去1日以内の変更・削除を拾えるように。
 
-### Contributors
-- chess
+### Fixed / 修正
+- Ensured existing duplication prevention and event update logic remain compatible with the new fetch strategy.
+- 既存の重複防止ロジックやイベント更新フローとの整合性を確認・維持。
