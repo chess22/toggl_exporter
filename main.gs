@@ -1,22 +1,10 @@
 /*
   Toggl time entries export to GoogleCalendar
-  author: Masato Kawaguchi
+  original author: Masato Kawaguchi
+  modified by: chess
   Released under the BSD-3-Clause license
-  version: 1.2.00
+  version: 1.4.00
   https://github.com/mkawaguchi/toggl_exporter/blob/master/LICENSE
-
-  required: moment.js
-    project-key: 15hgNOjKHUG4UtyZl9clqBbl23sDvWMS8pfDJOyIapZk5RBqwL3i-rlCo
-
-  Copyright 2024, Masato Kawaguchi
-
-  Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
-
-  1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
-  2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
-  3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
-
-  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS IS” AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 /**
@@ -30,7 +18,6 @@
  * 5. カスタムメニューによる手動操作の提供
  */
 
-// **設定セクション**
 const CONFIG = {
   CACHE_KEY: 'toggl_exporter:lastmodify_datetime', // キャッシュキー
   TIME_OFFSET: 9 * 60 * 60, // JST (秒)
@@ -183,6 +170,9 @@ function onOpen() {
     .addItem('キャッシュをクリア', 'clearScriptCache')
     .addItem('テストメールを送信', 'sendTestEmail')
     .addItem('重複イベントを削除', 'removeDuplicateEvents')
+    .addItem('重複イベント作成テスト', 'testCreateDuplicateEvents')
+    .addItem('重複イベント削除テスト', 'testRemoveDuplicateEvents')
+    .addItem('重複イベント統合テスト', 'testDuplicateEventsWorkflow')
     .addToUi();
 }
 
@@ -557,6 +547,73 @@ function removeDuplicateEvents() {
 }
 
 /**
+ * テスト用の重複イベント作成関数
+ * カレンダーに同一IDの重複イベントを2つ作成します。
+ */
+function testCreateDuplicateEvents() {
+  try {
+    var now = new Date();
+    var oneHourLater = new Date(now.getTime() + 60 * 60 * 1000); // 現在時刻 + 1時間
+    var twoHoursLater = new Date(now.getTime() + 2 * 60 * 60 * 1000); // 現在時刻 + 2時間
+    
+    var title = "テストイベント ID:654321";
+    
+    // 最初のイベント作成
+    recordActivityLog(title, oneHourLater.toISOString(), twoHoursLater.toISOString());
+    
+    // 2つ目の重複イベント作成（異なる時間で）
+    var threeHoursLater = new Date(now.getTime() + 3 * 60 * 60 * 1000); // 現在時刻 + 3時間
+    var fourHoursLater = new Date(now.getTime() + 4 * 60 * 60 * 1000); // 現在時刻 + 4時間
+    recordActivityLog(title, threeHoursLater.toISOString(), fourHoursLater.toISOString());
+    
+    log(LOG_LEVELS.INFO, "重複イベントの作成テストが成功しました。");
+    SpreadsheetApp.getUi().alert("重複イベントを2つカレンダーに作成しました。\nタイトル: " + title);
+  } catch (e) {
+    log(LOG_LEVELS.ERROR, "重複イベントの作成テストに失敗しました: " + e.message);
+    notifyError(e, '654321');
+    SpreadsheetApp.getUi().alert("重複イベントの作成に失敗しました。ログを確認してください。");
+  }
+}
+
+/**
+ * テスト用の重複イベント削除関数
+ */
+function testRemoveDuplicateEvents() {
+  try {
+    removeDuplicateEvents();
+    log(LOG_LEVELS.INFO, "removeDuplicateEvents関数のテストが成功しました。");
+    SpreadsheetApp.getUi().alert("重複イベントの削除テストが成功しました。");
+  } catch (e) {
+    log(LOG_LEVELS.ERROR, "removeDuplicateEvents関数のテストに失敗しました: " + e.message);
+    notifyError(e);
+    SpreadsheetApp.getUi().alert("重複イベントの削除テストに失敗しました。ログを確認してください。");
+  }
+}
+
+/**
+ * 統合テスト関数
+ * 重複イベントを作成し、その後削除する一連のテストを実行します。
+ */
+function testDuplicateEventsWorkflow() {
+  try {
+    // 重複イベントの作成
+    testCreateDuplicateEvents();
+    
+    // 少し待機してから削除（必要に応じて）
+    Utilities.sleep(2000); // 2秒待機
+    
+    // 重複イベントの削除
+    testRemoveDuplicateEvents();
+    
+    SpreadsheetApp.getUi().alert("重複イベントの作成と削除のテストが完了しました。");
+  } catch (e) {
+    log(LOG_LEVELS.ERROR, "統合テストに失敗しました: " + e.message);
+    notifyError(e);
+    SpreadsheetApp.getUi().alert("統合テストに失敗しました。ログを確認してください。");
+  }
+}
+
+/**
  * メイン関数: Togglからデータを取得し、Googleカレンダーにイベントを記録・更新・削除
  */
 function watch() {
@@ -710,5 +767,28 @@ function testRemoveDuplicateEvents() {
     log(LOG_LEVELS.ERROR, "removeDuplicateEvents関数のテストに失敗しました: " + e.message);
     notifyError(e);
     SpreadsheetApp.getUi().alert("重複イベントの削除テストに失敗しました。ログを確認してください。");
+  }
+}
+
+/**
+ * 統合テスト関数
+ * 重複イベントを作成し、その後削除する一連のテストを実行します。
+ */
+function testDuplicateEventsWorkflow() {
+  try {
+    // 重複イベントの作成
+    testCreateDuplicateEvents();
+    
+    // 少し待機してから削除（必要に応じて）
+    Utilities.sleep(2000); // 2秒待機
+    
+    // 重複イベントの削除
+    testRemoveDuplicateEvents();
+    
+    SpreadsheetApp.getUi().alert("重複イベントの作成と削除のテストが完了しました。");
+  } catch (e) {
+    log(LOG_LEVELS.ERROR, "統合テストに失敗しました: " + e.message);
+    notifyError(e);
+    SpreadsheetApp.getUi().alert("統合テストに失敗しました。ログを確認してください。");
   }
 }
