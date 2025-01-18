@@ -3,42 +3,45 @@
   original author: Masato Kawaguchi
   modified by: chess
   Released under the BSD-3-Clause license
-  version: 1.4.00
+  version: 1.4.02
   https://github.com/mkawaguchi/toggl_exporter/blob/master/LICENSE
 
   CHANGELOG:
-    v1.4.00 (2025-01-18):
+    v1.4.02 (2025-01-18):
       - 初回実行時に過去30日分を取得
-      - 2回目以降は(前回停止時刻 - 1日)から現在までを再取得し、過去の変更や削除にも対応
-      - 既存の重複防止・更新ロジックを維持
+      - 2回目以降は (前回停止時刻 - 1日) から現在までを再取得
+      - deleteRemovedEntriesShort() を過去1日に設定し、通常トリガーでの低負荷削除チェック
+      - deleteRemovedEntriesManual() を過去1ヶ月に設定し、手動で古い削除にも対応可能
+      - 「削除チェック」は Toggl から削除されたエントリをカレンダー側でも削除する機能
 */
 
 /**
  * TogglとGoogleカレンダーを同期するGoogle Apps Script
  *
  * 機能:
- * 1. Togglからタイムエントリを取得
- * 2. Googleカレンダーにイベントを追加・更新・削除
- * 3. 重複するイベントの作成を防止
- * 4. エラーハンドリングと通知
- * 5. カスタムメニューによる手動操作の提供
+ * 1. Togglからタイムエントリを取得（初回30日、2回目以降は前回停止時刻-1日）
+ * 2. Googleカレンダーにイベントを作成・更新
+ * 3. 重複イベントの作成を防止・削除
+ * 4. Togglで削除されたエントリをカレンダーからも削除 (deleteRemovedEntriesXxx)
+ * 5. エラーハンドリングと通知
+ * 6. カスタムメニューによる手動操作の提供
  */
 
 const CONFIG = {
-  CACHE_KEY: 'toggl_exporter:lastmodify_datetime', // キャッシュキー
+  CACHE_KEY: 'toggl_exporter:lastmodify_datetime',
   TIME_OFFSET: 9 * 60 * 60, // JST (秒)
   TOGGL_API_HOSTNAME: 'https://api.track.toggl.com',
-  GOOGLE_CALENDAR_ID: PropertiesService.getScriptProperties().getProperty('GOOGLE_CALENDAR_ID'), // GoogleカレンダーID
-  NOTIFICATION_EMAIL: PropertiesService.getScriptProperties().getProperty('NOTIFICATION_EMAIL'), // エラー通知メールアドレス
-  TOGGL_BASIC_AUTH: PropertiesService.getScriptProperties().getProperty('TOGGL_BASIC_AUTH'), // Toggl API認証情報（Base64エンコード済み）
-  DEBUG_MODE: false, // デバッグモード（true: ログ出力, false: ログ出力なし）
-  MAX_CACHE_AGE: 12 * 60 * 60, // 12時間（秒単位）
-  RETRY_COUNT: 5, // 再試行回数
-  RETRY_DELAY: 2000, // 再試行間隔（ミリ秒）
+  GOOGLE_CALENDAR_ID: PropertiesService.getScriptProperties().getProperty('GOOGLE_CALENDAR_ID'),
+  NOTIFICATION_EMAIL: PropertiesService.getScriptProperties().getProperty('NOTIFICATION_EMAIL'),
+  TOGGL_BASIC_AUTH: PropertiesService.getScriptProperties().getProperty('TOGGL_BASIC_AUTH'),
+  DEBUG_MODE: false,
+  MAX_CACHE_AGE: 12 * 60 * 60, // 12時間（秒）
+  RETRY_COUNT: 5,
+  RETRY_DELAY: 2000, // ms
 };
 
 /**
- * ログレベルの定義
+ * ログレベル
  */
 const LOG_LEVELS = {
   DEBUG: 1,
@@ -50,8 +53,6 @@ const CURRENT_LOG_LEVEL = CONFIG.DEBUG_MODE ? LOG_LEVELS.DEBUG : LOG_LEVELS.INFO
 
 /**
  * ログ出力用関数
- * @param {number} level - ログレベル
- * @param {string} message - ログメッセージ
  */
 function log(level, message) {
   if (level >= CURRENT_LOG_LEVEL) {
@@ -71,8 +72,6 @@ function log(level, message) {
 
 /**
  * エラー発生時に通知メールを送信する関数
- * @param {Error} e - 発生したエラー
- * @param {string} [record_id] - 関連するレコードID（オプション）
  */
 function notifyError(e, record_id = null) {
   const email = CONFIG.NOTIFICATION_EMAIL;
@@ -101,12 +100,11 @@ ${e.stack}
 
 /**
  * ロックを取得する関数
- * @returns {Lock} 取得したロックオブジェクト
  */
 function getLock() {
   const lock = LockService.getScriptLock();
   try {
-    lock.waitLock(30000); // 最大30秒待機
+    lock.waitLock(30000);
     log(LOG_LEVELS.INFO, "Lock acquired");
     return lock;
   } catch (e) {
@@ -117,10 +115,6 @@ function getLock() {
 
 /**
  * 指定した関数を再試行するユーティリティ関数
- * @param {Function} fn - 実行する関数
- * @param {number} retries - 最大再試行回数
- * @param {number} delay - 再試行間の待機時間（ミリ秒）
- * @returns {*} 関数の戻り値
  */
 function retry(fn, retries = CONFIG.RETRY_COUNT, delay = CONFIG.RETRY_DELAY) {
   for (let i = 0; i < retries; i++) {
@@ -175,7 +169,8 @@ function onOpen() {
   ui.createMenu('カスタムメニュー')
     .addItem('キャッシュをクリア', 'clearScriptCache')
     .addItem('テストメールを送信', 'sendTestEmail')
-    .addItem('重複イベントを削除', 'removeDuplicateEvents')
+    .addItem('削除(短期間)', 'deleteRemovedEntriesShort')    // 過去1日
+    .addItem('削除(長期間)', 'deleteRemovedEntriesManual')   // 過去1ヶ月
     .addItem('重複イベント作成テスト', 'testCreateDuplicateEvents')
     .addItem('重複イベント削除テスト', 'testRemoveDuplicateEvents')
     .addItem('重複イベント統合テスト', 'testDuplicateEventsWorkflow')
@@ -183,8 +178,7 @@ function onOpen() {
 }
 
 /**
- * キャッシュから最後の更新日時を取得する関数
- * @returns {number} UNIXタイムスタンプ（秒）または-1（キャッシュが存在しない/エラー）
+ * キャッシュから最後の更新日時を取得
  */
 function getLastModifyDatetime() {
   const cache = CacheService.getScriptCache();
@@ -222,7 +216,6 @@ function getLastModifyDatetime() {
 
 /**
  * キャッシュに最後の更新日時を保存する関数
- * @param {number} unix_timestamp - UNIXタイムスタンプ（秒）
  */
 function putLastModifyDatetime(unix_timestamp) {
   const cache = CacheService.getScriptCache();
@@ -232,10 +225,7 @@ function putLastModifyDatetime(unix_timestamp) {
 }
 
 /**
- * 期間をISO文字列で指定してTogglエントリを取得する関数
- * @param {string} startIso - 開始日時 (ISO8601形式)
- * @param {string} endIso   - 終了日時 (ISO8601形式)
- * @returns {Array|null} - タイムエントリの配列または null（エラー時）
+ * TogglのタイムエントリをISO期間指定で取得する関数
  */
 function getTimeEntriesRange(startIso, endIso) {
   return retry(() => {
@@ -270,37 +260,7 @@ function getTimeEntriesRange(startIso, endIso) {
 }
 
 /**
- * Googleカレンダーから関連するすべてのイベントを取得し、マッピングする関数
- * @returns {Object} record_idをキーとした最新イベントのマッピング
- */
-function getAllRelevantEvents() {
-  const calendar = CalendarApp.getCalendarById(CONFIG.GOOGLE_CALENDAR_ID);
-  const now = new Date();
-  const pastDate = new Date(now.getFullYear(), now.getMonth() - 3, now.getDate()); // 過去3ヶ月
-  
-  const events = calendar.getEvents(pastDate, now);
-  const eventMap = {};
-  
-  events.forEach(function(event) {
-    const title = event.getTitle();
-    const match = title.match(/ID:(\d+)$/);
-    if (match && match[1]) {
-      const record_id = match[1];
-      // 最新のイベントのみ保持
-      if (!eventMap[record_id] || new Date(event.getLastUpdated()) > new Date(eventMap[record_id].getLastUpdated())) {
-        eventMap[record_id] = event;
-      }
-    }
-  });
-  
-  return eventMap;
-}
-
-/**
  * Googleカレンダーにイベントを記録する関数
- * @param {string} title - イベントのタイトル（IDを含む）
- * @param {string} started_at - イベント開始時刻のISO8601文字列
- * @param {string} ended_at - イベント終了時刻のISO8601文字列
  */
 function recordActivityLog(title, started_at, ended_at) {
   log(LOG_LEVELS.DEBUG, `recordActivityLog called with title: "${title}", started_at: "${started_at}", ended_at: "${ended_at}"`);
@@ -333,19 +293,15 @@ function recordActivityLog(title, started_at, ended_at) {
 }
 
 /**
- * Googleカレンダーに既にイベントが存在するかを確認し、必要に応じて更新する関数
- * @param {string} record_id - タイムエントリのID
- * @param {Object} newRecord - 更新後のタイムエントリデータ
- * @returns {boolean} イベントが存在し、更新された場合はtrue、存在しない場合はfalse
+ * 既存イベントを検索し必要に応じて更新(重複防止・変更反映)
  */
 function eventExistsAndUpdate(record_id, newRecord) {
   const calendar = CalendarApp.getCalendarById(CONFIG.GOOGLE_CALENDAR_ID);
   
-  const searchQuery = `ID:${record_id}`;
+  // 過去3ヶ月を検索するのは、更新が2か月前にあった場合にも対応するため
   const now = new Date();
-  const pastDate = new Date(now.getFullYear(), now.getMonth() - 3, now.getDate()); // 過去3ヶ月
-  
-  const events = calendar.getEvents(pastDate, now, { search: searchQuery });
+  const pastDate = new Date(now.getFullYear(), now.getMonth() - 3, now.getDate());
+  const events = calendar.getEvents(pastDate, now, { search: `ID:${record_id}` });
   
   log(LOG_LEVELS.DEBUG, `Searching for events with ID:${record_id}. Found ${events.length} events.`);
   
@@ -372,7 +328,7 @@ function eventExistsAndUpdate(record_id, newRecord) {
       
       const eventTitleNeedsUpdate = (matchingEvent.getTitle() !== updatedTitle);
       const eventTimeNeedsUpdate  = (matchingEvent.getStartTime().toISOString() !== newStart)
-                                || (matchingEvent.getEndTime().toISOString() !== newEnd);
+                                 || (matchingEvent.getEndTime().toISOString() !== newEnd);
       
       log(LOG_LEVELS.DEBUG, `EventTitleNeedsUpdate: ${eventTitleNeedsUpdate}, EventTimeNeedsUpdate: ${eventTimeNeedsUpdate}`);
       
@@ -400,10 +356,7 @@ function eventExistsAndUpdate(record_id, newRecord) {
 }
 
 /**
- * Toggl APIからプロジェクトデータを取得する関数
- * @param {string} workspace_id - ワークスペースID
- * @param {string} project_id - プロジェクトID
- * @returns {Object} プロジェクトデータまたは空オブジェクト
+ * Toggl APIからプロジェクトデータを取得 (IDベース)
  */
 function getProjectData(workspace_id, project_id) {
   if (!workspace_id || !project_id) return {};
@@ -432,8 +385,100 @@ function getProjectData(workspace_id, project_id) {
 }
 
 /**
- * Googleカレンダー内の重複イベントを削除する関数
- * 既に存在するイベントの中から最新の1つを残し、他を削除します。
+ * Togglで削除されたエントリをカレンダーから削除する(過去1日版)
+ * - 通常トリガー等で用いて、低負荷運用
+ */
+function deleteRemovedEntriesShort() {
+  return retry(() => {
+    const calendar = CalendarApp.getCalendarById(CONFIG.GOOGLE_CALENDAR_ID);
+    if (!calendar) {
+      throw new Error(`Invalid GOOGLE_CALENDAR_ID: "${CONFIG.GOOGLE_CALENDAR_ID}"`);
+    }
+    
+    // 「過去1日」の範囲
+    const now = new Date();
+    const oneDayMs = 1 * 24 * 60 * 60 * 1000;
+    const pastDate = new Date(now.getTime() - oneDayMs);
+
+    const events = calendar.getEvents(pastDate, now);
+
+    events.forEach(function(event) {
+      const title = event.getTitle();
+      const match = title.match(/ID:(\d+)$/);
+      if (match && match[1]) {
+        const record_id = match[1];
+        // TogglでこのIDが存在するかチェック
+        const exists = checkIfTogglEntryExists(record_id);
+        if (!exists) {
+          // Toggl側で削除された → カレンダーからも削除
+          event.deleteEvent();
+          log(LOG_LEVELS.INFO, `Deleted event (short range) for removed Toggl entry ID:${record_id}`);
+        }
+      }
+    });
+  }, CONFIG.RETRY_COUNT, CONFIG.RETRY_DELAY);
+}
+
+/**
+ * Togglで削除されたエントリをカレンダーから削除(過去1ヶ月版)
+ * - 手動実行用、より古い削除を拾いたい場合に使う
+ */
+function deleteRemovedEntriesManual() {
+  return retry(() => {
+    const calendar = CalendarApp.getCalendarById(CONFIG.GOOGLE_CALENDAR_ID);
+    if (!calendar) {
+      throw new Error(`Invalid GOOGLE_CALENDAR_ID: "${CONFIG.GOOGLE_CALENDAR_ID}"`);
+    }
+    
+    // 「過去1ヶ月」の範囲
+    const now = new Date();
+    const pastDate = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
+
+    const events = calendar.getEvents(pastDate, now);
+
+    events.forEach(function(event) {
+      const title = event.getTitle();
+      const match = title.match(/ID:(\d+)$/);
+      if (match && match[1]) {
+        const record_id = match[1];
+        const exists = checkIfTogglEntryExists(record_id);
+        if (!exists) {
+          event.deleteEvent();
+          log(LOG_LEVELS.INFO, `Deleted event (manual range) for removed Toggl entry ID:${record_id}`);
+        }
+      }
+    });
+  }, CONFIG.RETRY_COUNT, CONFIG.RETRY_DELAY);
+}
+
+/**
+ * Toggl APIで指定IDのタイムエントリが存在するか確認
+ */
+function checkIfTogglEntryExists(record_id) {
+  return retry(() => {
+    const uri = `${CONFIG.TOGGL_API_HOSTNAME}/api/v9/me/time_entries/${record_id}`;
+    
+    const response = UrlFetchApp.fetch(uri, {
+      method: 'GET',
+      headers: { "Authorization": "Basic " + CONFIG.TOGGL_BASIC_AUTH },
+      muteHttpExceptions: true
+    });
+    
+    const responseCode = response.getResponseCode();
+    if (responseCode === 200) {
+      return true;   // 存在する
+    } else if (responseCode === 404) {
+      return false;  // 削除された
+    } else {
+      log(LOG_LEVELS.ERROR, `Unexpected API response code when checking entry existence: ${responseCode}`);
+      throw new Error(`Unexpected response code: ${responseCode}`);
+    }
+  }, CONFIG.RETRY_COUNT, CONFIG.RETRY_DELAY);
+}
+
+/**
+ * 重複イベントを削除する (過去3ヶ月)
+ * - 同じIDを持つ複数イベントがある場合、最新以外を削除
  */
 function removeDuplicateEvents() {
   return retry(() => {
@@ -461,42 +506,9 @@ function removeDuplicateEvents() {
 }
 
 /**
- * Togglで削除されたタイムエントリに対応するGoogleカレンダーのイベントを削除する関数
- */
-function deleteRemovedEntries() {
-  return retry(() => {
-    const calendar = CalendarApp.getCalendarById(CONFIG.GOOGLE_CALENDAR_ID);
-    if (!calendar) {
-      log(LOG_LEVELS.ERROR, `Invalid GOOGLE_CALENDAR_ID: "${CONFIG.GOOGLE_CALENDAR_ID}"`);
-      throw new Error(`Invalid GOOGLE_CALENDAR_ID: "${CONFIG.GOOGLE_CALENDAR_ID}"`);
-    }
-    
-    // 過去1ヶ月間のイベントを対象に削除チェック
-    const now = new Date();
-    const pastDate = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
-    
-    const events = calendar.getEvents(pastDate, now);
-    
-    events.forEach(function(event) {
-      const title = event.getTitle();
-      const match = title.match(/ID:(\d+)$/);
-      if (match && match[1]) {
-        const record_id = match[1];
-        const exists = checkIfTogglEntryExists(record_id);
-        if (!exists) {
-          event.deleteEvent();
-          log(LOG_LEVELS.INFO, `Deleted event for removed Toggl entry ID:${record_id}`);
-        }
-      }
-    });
-  }, CONFIG.RETRY_COUNT, CONFIG.RETRY_DELAY);
-}
-
-/**
- * メイン関数:
- *  - キャッシュが無い場合は過去30日分
- *  - キャッシュがある場合は (前回最終停止時刻 - 3日) ~ 現在
- * を取得し、Googleカレンダーと同期する
+ * メイン同期 (watch)
+ * - 初回: 過去30日
+ * - 2回目以降: (前回停止時刻 - 1日) 〜 現在
  */
 function watch() {
   let lock;
@@ -512,12 +524,12 @@ function watch() {
       endDate = now;
       startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000); // 30日前
     } else {
-      // 差分: (前回 + 1秒) - 3日(オーバーラップ) から現在まで
+      // 2回目以降: (前回停止時刻 - 1日) 〜 現在
       log(LOG_LEVELS.INFO, "Cached data found");
       const overlapSeconds = 1 * 24 * 60 * 60; // 1日
       const now = new Date();
       endDate = now;
-      let startUnix = check_datetime - overlapSeconds; 
+      let startUnix = check_datetime - overlapSeconds;
       if (startUnix < 0) startUnix = 0;
       startDate = new Date(startUnix * 1000);
       
@@ -532,9 +544,6 @@ function watch() {
     if (time_entries && time_entries.length > 0) {
       log(LOG_LEVELS.INFO, "Number of time entries fetched: " + time_entries.length);
       let last_stop_datetime = (check_datetime === -1) ? 0 : check_datetime;
-      
-      // カレンダー上の既存イベント取得（過去3ヶ月）
-      let eventMap = getAllRelevantEvents();
       
       time_entries.forEach(record => {
         if (!record.stop) {
@@ -573,7 +582,6 @@ function watch() {
           log(LOG_LEVELS.DEBUG, "Existing event processed for ID: " + record.id);
         }
         
-        // 最後の停止時刻を更新
         if (stop_time > last_stop_datetime) {
           last_stop_datetime = stop_time;
         }
@@ -581,7 +589,7 @@ function watch() {
       
       log(LOG_LEVELS.INFO, "Updating cache with last stop datetime: " + last_stop_datetime);
       if (last_stop_datetime) {
-        const new_timestamp = last_stop_datetime + 1; // 1秒加算
+        const new_timestamp = last_stop_datetime + 1;
         putLastModifyDatetime(new_timestamp);
         log(LOG_LEVELS.INFO, "Cache updated with new timestamp: " + new_timestamp);
       } else {
@@ -602,31 +610,6 @@ function watch() {
 }
 
 /**
- * テストイベントを作成し、カレンダーに登録する関数
- */
-function testRecordActivityLog() {
-  try {
-    var now = new Date();
-    var oneHourLater = new Date(now.getTime() + 60 * 60 * 1000);
-    var twoHoursLater = new Date(now.getTime() + 2 * 60 * 60 * 1000);
-
-    var title = "テストイベント ID:123456";
-    var started_at = oneHourLater.toISOString();
-    var ended_at   = twoHoursLater.toISOString();
-
-    recordActivityLog(title, started_at, ended_at);
-    log(LOG_LEVELS.INFO, "recordActivityLog関数のテストが成功しました。");
-    SpreadsheetApp.getUi().alert(
-      "テストイベントをカレンダーに作成しました。\n開始時刻: " + started_at + "\n終了時刻: " + ended_at
-    );
-  } catch (e) {
-    log(LOG_LEVELS.ERROR, "recordActivityLog関数のテストに失敗しました: " + e.message);
-    notifyError(e, '123456');
-    SpreadsheetApp.getUi().alert("テストイベントの作成に失敗しました。ログを確認してください。");
-  }
-}
-
-/**
  * テスト用の重複イベント作成関数
  */
 function testCreateDuplicateEvents() {
@@ -638,7 +621,6 @@ function testCreateDuplicateEvents() {
     
     recordActivityLog(title, oneHourLater.toISOString(), twoHoursLater.toISOString());
     
-    // もう一つ別の時間帯で作成
     var threeHoursLater = new Date(now.getTime() + 3 * 60 * 60 * 1000);
     var fourHoursLater  = new Date(now.getTime() + 4 * 60 * 60 * 1000);
     recordActivityLog(title, threeHoursLater.toISOString(), fourHoursLater.toISOString());
@@ -668,13 +650,12 @@ function testRemoveDuplicateEvents() {
 }
 
 /**
- * 統合テスト関数
- * 重複イベントを作成し、その後削除する一連のテストを実行
+ * 統合テスト関数: 重複イベントを作成→削除
  */
 function testDuplicateEventsWorkflow() {
   try {
     testCreateDuplicateEvents();
-    Utilities.sleep(2000); // 2秒待機
+    Utilities.sleep(2000);
     testRemoveDuplicateEvents();
     SpreadsheetApp.getUi().alert("重複イベントの作成と削除のテストが完了しました。");
   } catch (e) {
