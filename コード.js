@@ -8,11 +8,10 @@
 
   CHANGELOG:
     v1.4.02-modified (2025/02/01):
-      - タイムアウト対策として、進捗保存および途中再開の仕組みを追加
-      - 手動実行モードを3種類実装：タイムアウトモード（1分区切り）、完遂モード（自動再開、5分30秒）、初回実行モード（キャッシュ無視）
-      - 初期取得時、IDが無いタイムエントリは、開始時刻と名称（説明）から複合キーを生成し、重複チェック時に使用
-      - 既存のカレンダーイベントにIDが付与されていない場合、重複チェック時にタイトルを更新して複合キーを付与するように変更
-      - 進捗状況のログは、処理開始時、タイムアウト時、および処理完了時にのみ出力
+      - タイムアウト対策として、処理中に進捗を保存し途中再開する仕組みを追加
+      - 手動実行モードとして、タイムアウトで中断する（1分区切り）、完遂（自動再開）および常に初回実行（キャッシュ無視）モードを選択可能に実装
+      - 手動完遂モードのタイムアウト閾値を6分から5分30秒（330,000ms）に変更
+      - 初回実行時の進捗状況（処理件数、パーセンテージ、処理中の日付など）をログに出力するよう改良
 */
 
 /** CONFIG: 基本設定 **/
@@ -37,7 +36,11 @@ const CONFIG = {
 };
 
 /** ログレベル **/
-const LOG_LEVELS = { DEBUG: 1, INFO: 2, ERROR: 3 };
+const LOG_LEVELS = {
+  DEBUG: 1,
+  INFO: 2,
+  ERROR: 3,
+};
 const CURRENT_LOG_LEVEL = CONFIG.DEBUG_MODE ? LOG_LEVELS.DEBUG : LOG_LEVELS.INFO;
 
 /** ログ出力用関数 **/
@@ -77,14 +80,14 @@ function putLastModifyDatetime(timestamp) {
 /** retry ユーティリティ関数 **/
 function retry(fn, retries, delay) {
   for (var i = 0; i < retries; i++) {
-    try { 
-      return fn(); 
+    try {
+      return fn();
     } catch (e) {
       if (i < retries - 1) {
         log(LOG_LEVELS.DEBUG, "リトライ中 (" + (i + 1) + "/" + retries + ") - エラー: " + e.message);
         Utilities.sleep(delay);
-      } else { 
-        throw e; 
+      } else {
+        throw e;
       }
     }
   }
@@ -110,8 +113,12 @@ function getTimeEntriesRange(startIso, endIso) {
       throw new Error("Toggl API returned status code " + responseCode);
     }
     var parsed = JSON.parse(responseText);
-    if (Array.isArray(parsed)) { return parsed; }
-    else { log(LOG_LEVELS.ERROR, "API returned non-array response"); return null; }
+    if (Array.isArray(parsed)) {
+      return parsed;
+    } else {
+      log(LOG_LEVELS.ERROR, "API returned non-array response");
+      return null;
+    }
   }, CONFIG.RETRY_COUNT, CONFIG.RETRY_DELAY);
 }
 
@@ -119,84 +126,73 @@ function getTimeEntriesRange(startIso, endIso) {
 function recordActivityLog(title, started_at, ended_at) {
   log(LOG_LEVELS.DEBUG, 'recordActivityLog called with title: "' + title + '", started_at: "' + started_at + '", ended_at: "' + ended_at + '"');
   var calendar = CalendarApp.getCalendarById(CONFIG.GOOGLE_CALENDAR_ID);
-  if (!calendar) { 
-    log(LOG_LEVELS.ERROR, 'Invalid GOOGLE_CALENDAR_ID: "' + CONFIG.GOOGLE_CALENDAR_ID + '"'); 
-    throw new Error('Invalid GOOGLE_CALENDAR_ID: "' + CONFIG.GOOGLE_CALENDAR_ID + '"'); 
+  if (!calendar) {
+    log(LOG_LEVELS.ERROR, 'Invalid GOOGLE_CALENDAR_ID: "' + CONFIG.GOOGLE_CALENDAR_ID + '"');
+    throw new Error('Invalid GOOGLE_CALENDAR_ID: "' + CONFIG.GOOGLE_CALENDAR_ID + '"');
   }
-  var startDate = new Date(started_at), endDate = new Date(ended_at);
-  if (isNaN(startDate.getTime())) { 
-    log(LOG_LEVELS.ERROR, 'Invalid start date: "' + started_at + '"'); 
-    throw new RangeError('Invalid start date: "' + started_at + '"'); 
+  var startDate = new Date(started_at);
+  var endDate   = new Date(ended_at);
+  if (isNaN(startDate.getTime())) {
+    log(LOG_LEVELS.ERROR, 'Invalid start date: "' + started_at + '"');
+    throw new RangeError('Invalid start date: "' + started_at + '"');
   }
-  if (isNaN(endDate.getTime())) { 
-    log(LOG_LEVELS.ERROR, 'Invalid end date: "' + ended_at + '"'); 
-    throw new RangeError('Invalid end date: "' + ended_at + '"'); 
+  if (isNaN(endDate.getTime())) {
+    log(LOG_LEVELS.ERROR, 'Invalid end date: "' + ended_at + '"');
+    throw new RangeError('Invalid end date: "' + ended_at + '"');
   }
   try {
     calendar.createEvent(title, startDate, endDate);
     log(LOG_LEVELS.INFO, 'Created event: "' + title + '" from ' + started_at + " to " + ended_at);
-  } catch (createError) { 
+  } catch (createError) {
     log(LOG_LEVELS.ERROR, "Error creating event: " + createError);
-    throw createError; 
+    throw createError;
   }
 }
 
-/** 複合キーを生成する関数（IDが無い場合用） **/
-function getCompositeId(newRecord) {
-  // 開始時刻と説明を組み合わせ、一意のキーを生成
-  return "NO_ID:" + new Date(newRecord.start).toISOString() + "_" + (newRecord.description || "名称なし");
-}
-
-/** 既存イベントの検索と更新（重複防止）
-    ・IDがある場合はそのIDを使用、無い場合は複合キーを生成し利用
-    ・さらに、名称と開始・終了時刻が一致するかで重複を判定
-    ・既存イベントにIDが付与されていない場合は、タイトルを更新して複合キーを付与
-*/
+/** 既存イベントの検索と更新（重複防止） **/
 function eventExistsAndUpdate(record_id, newRecord) {
-  var idKey = record_id ? record_id : getCompositeId(newRecord);
   var calendar = CalendarApp.getCalendarById(CONFIG.GOOGLE_CALENDAR_ID);
   var now = new Date();
   var pastDate = new Date(now.getFullYear(), now.getMonth() - 3, now.getDate());
-  // まず、"ID:" + idKey を含むイベントを検索
-  var events = calendar.getEvents(pastDate, now, { search: "ID:" + idKey });
-  log(LOG_LEVELS.DEBUG, "Searching for events with key " + idKey + ". Found " + events.length + " events.");
-  
+  var events = calendar.getEvents(pastDate, now, { search: "ID:" + record_id });
+  log(LOG_LEVELS.DEBUG, "Searching for events with ID:" + record_id + ". Found " + events.length + " events.");
   if (events.length > 0) {
+    var matchingEvent = null;
     for (var i = 0; i < events.length; i++) {
       var event = events[i];
-      var title = event.getTitle();
-      // 既存イベントのタイトルに "ID:" が含まれているかチェック
-      if (title.indexOf("ID:") === -1) {
-        // ID情報が付与されていない場合は、名称と時刻から新たなタイトルを生成し更新
-        var project_data = getProjectData(newRecord.wid, newRecord.pid);
-        var project_name = project_data.name || '';
-        var newName = [(newRecord.description || '名称なし'), project_name].filter(Boolean).join(" : ");
-        var updatedTitle = newName + " ID:" + idKey;
+      var titleMatch = event.getTitle().match(/ID:(\d+)$/);
+      if (titleMatch && titleMatch[1] === String(record_id)) {
+        matchingEvent = event;
+        break;
+      }
+    }
+    if (matchingEvent) {
+      log(LOG_LEVELS.DEBUG, "Matching event found: \"" + matchingEvent.getTitle() + "\"");
+      var newStart = newRecord.start;
+      var newEnd   = newRecord.stop;
+      var project_data = getProjectData(newRecord.wid, newRecord.pid);
+      var project_name = project_data.name || '';
+      var updatedTitle = [(newRecord.description || '名称なし'), project_name].filter(Boolean).join(" : ") + " ID:" + record_id;
+      var eventTitleNeedsUpdate = (matchingEvent.getTitle() !== updatedTitle);
+      var eventTimeNeedsUpdate  = (matchingEvent.getStartTime().toISOString() !== newStart) ||
+                                  (matchingEvent.getEndTime().toISOString() !== newEnd);
+      log(LOG_LEVELS.DEBUG, "EventTitleNeedsUpdate: " + eventTitleNeedsUpdate + ", EventTimeNeedsUpdate: " + eventTimeNeedsUpdate);
+      if (eventTitleNeedsUpdate || eventTimeNeedsUpdate) {
         try {
           retry(function(){
-            event.setTitle(updatedTitle);
+            matchingEvent.setTitle(updatedTitle);
+            matchingEvent.setTime(new Date(newStart), new Date(newEnd));
           }, CONFIG.RETRY_COUNT, CONFIG.RETRY_DELAY);
-          log(LOG_LEVELS.INFO, "Updated existing event title to include composite key: " + updatedTitle);
-        } catch(e) {
-          log(LOG_LEVELS.ERROR, "Error updating event title with composite key: " + e);
+          log(LOG_LEVELS.INFO, "Updated event for ID:" + record_id);
+        } catch (e) {
+          log(LOG_LEVELS.ERROR, "Error updating event for ID: " + record_id + " - " + e);
+          notifyError(e, record_id);
+          return false;
         }
-        return true;
       } else {
-        // タイトルに「ID:」がある場合、"ID:"以前の部分を名称として抽出
-        var titleParts = title.split(" ID:");
-        var eventName = titleParts[0];
-        var project_data = getProjectData(newRecord.wid, newRecord.pid);
-        var project_name = project_data.name || '';
-        var newName = [(newRecord.description || '名称なし'), project_name].filter(Boolean).join(" : ");
-        var eventStart = event.getStartTime().toISOString();
-        var eventEnd = event.getEndTime().toISOString();
-        if (eventName === newName &&
-            eventStart === newRecord.start &&
-            eventEnd === newRecord.stop) {
-          log(LOG_LEVELS.INFO, "Matching event found with identical name and time for key " + idKey);
-          return true;
-        }
+        log(LOG_LEVELS.DEBUG, "No update needed for event ID:" + record_id);
       }
+      return true;
     }
   }
   return false;
@@ -237,11 +233,12 @@ const PROGRESS_KEY = 'toggl_exporter:last_processed_index';
  * バッチ処理のコア関数
  * @param {boolean} isManual   手動実行なら true、定期実行なら false
  * @param {boolean} autoResume 手動実行時に自動再開する場合は true、タイムアウトで中断する場合は false
- * @param {boolean} forceInitial true の場合、キャッシュを無視して初回実行（過去30日分取得）とする
+ * @param {boolean} forceInitial true の場合、キャッシュを無視して常に初回実行（過去30日分取得）とする
  */
 function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
   forceInitial = forceInitial || false;
   
+  // モード別タイムアウト閾値の設定
   var MAX_EXECUTION_TIME;
   if (isManual) {
     if (autoResume) {
@@ -257,6 +254,7 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
   var props = PropertiesService.getScriptProperties();
   var lastIndex = parseInt(props.getProperty(PROGRESS_KEY)) || 0;
   
+  // forceInitial が true の場合は初回実行
   var lastModify = forceInitial ? -1 : getLastModifyDatetime();
   var now = new Date();
   var startDate;
@@ -279,7 +277,7 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
   log(LOG_LEVELS.INFO, "Number of time entries fetched: " + timeEntries.length);
   var totalCount = timeEntries.length;
   log(LOG_LEVELS.INFO, "Total records to process: " + totalCount);
-  log(LOG_LEVELS.INFO, "Processing starts from index " + lastIndex + " at " + new Date().toISOString());
+  log(LOG_LEVELS.INFO, "Processing starts from index " + lastIndex + " (" + new Date().toISOString() + ")");
   
   for (var i = lastIndex; i < totalCount; i++) {
     var record = timeEntries[i];
@@ -299,15 +297,14 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
       if (!eventExistsAndUpdate(record.id, record)) {
         var project_data = getProjectData(record.wid, record.pid);
         var project_name = project_data.name || '';
-        var idKey = record.id ? record.id : getCompositeId(record);
-        var activity_log = [(record.description || '名称なし'), project_name].filter(Boolean).join(" : ") + " ID:" + idKey;
+        var activity_log = [(record.description || '名称なし'), project_name].filter(Boolean).join(" : ") + " ID:" + record.id;
         recordActivityLog(activity_log, record.start, record.stop);
         log(LOG_LEVELS.INFO, "Added event: " + activity_log);
       } else {
-        log(LOG_LEVELS.DEBUG, "Existing event processed for ID (or key): " + (record.id ? record.id : getCompositeId(record)));
+        log(LOG_LEVELS.DEBUG, "Existing event processed for ID: " + record.id);
       }
     } catch (e) {
-      log(LOG_LEVELS.ERROR, "Error processing record ID:" + (record.id || "NoID") + " - " + e);
+      log(LOG_LEVELS.ERROR, "Error processing record ID:" + record.id + " - " + e);
       notifyError(e, record.id);
     }
     
@@ -315,14 +312,14 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
       lastModify = stop_time;
     }
     
+    var processedCount = i + 1;
+    var percentComplete = Math.floor((processedCount / totalCount) * 100);
+    var remainingCount = totalCount - processedCount;
+    log(LOG_LEVELS.INFO, "Progress: Processed " + processedCount + " of " + totalCount + " (" + percentComplete + "%). Remaining: " + remainingCount + " records. Current record's stop date: " + record.stop);
+    
     var elapsed = new Date().getTime() - startTime;
     if (elapsed > MAX_EXECUTION_TIME) {
       props.setProperty(PROGRESS_KEY, i + 1);
-      var processedCount = i + 1;
-      var percentComplete = Math.floor((processedCount / totalCount) * 100);
-      var remainingCount = totalCount - processedCount;
-      log(LOG_LEVELS.INFO, "Timeout reached: Processed " + processedCount + " of " + totalCount + " (" + percentComplete + "%). Remaining: " + remainingCount + " records. Current record's stop date: " + record.stop);
-      
       if (!isManual || (isManual && autoResume)) {
         log(LOG_LEVELS.INFO, (isManual ? "手動完遂" : "自動実行") + ": 閾値に達したため中断します。Next start index: " + (i + 1));
         ScriptApp.newTrigger('automaticProcessTimeEntries')
@@ -338,7 +335,7 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
   
   putLastModifyDatetime(lastModify + 1);
   props.deleteProperty(PROGRESS_KEY);
-  log(LOG_LEVELS.INFO, "Processing complete: Processed all " + totalCount + " records at " + new Date().toISOString());
+  log(LOG_LEVELS.INFO, "全エントリの処理が完了しました。");
 }
 
 /**
@@ -363,7 +360,7 @@ function manualProcessTimeEntriesComplete() {
 }
 
 /**
- * 手動実行（初回実行モード）：キャッシュ無視で常に初回実行
+ * 手動実行（初回実行モード）：常に初回実行として開始（キャッシュ無視）
  */
 function manualProcessTimeEntriesInitial() {
   PropertiesService.getScriptProperties().deleteProperty(PROGRESS_KEY);
