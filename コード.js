@@ -11,7 +11,7 @@
       - タイムアウト対策として、処理中に進捗を保存し途中再開する仕組みを追加
       - 手動実行モードとして、タイムアウトで中断する（1分区切り）、完遂（自動再開）および常に初回実行（キャッシュ無視）モードを選択可能に実装
       - 手動完遂モードのタイムアウト閾値を6分から5分30秒（330,000ms）に変更
-      - 初回実行時の進捗状況（処理件数、パーセンテージ、処理中の日付など）をログに出力するよう改良
+      - 初回実行時の進捗状況は、処理の最初と完了時にのみ出力するよう改良
 */
 
 /** CONFIG: 基本設定 **/
@@ -22,9 +22,7 @@ const CONFIG = {
   GOOGLE_CALENDAR_ID: PropertiesService.getScriptProperties().getProperty('GOOGLE_CALENDAR_ID'),
   NOTIFICATION_EMAIL: PropertiesService.getScriptProperties().getProperty('NOTIFICATION_EMAIL'),
   TOGGL_BASIC_AUTH: PropertiesService.getScriptProperties().getProperty('TOGGL_BASIC_AUTH'),
-  
   DEBUG_MODE: false,  // DEBUG_MODE を true にすると、DEBUGレベルの詳細ログも出力されます（本番環境では false）
-  
   MAX_CACHE_AGE: 12 * 60 * 60, // 12時間（秒）
   RETRY_COUNT: 5,
   RETRY_DELAY: 2000, // ms
@@ -233,12 +231,12 @@ const PROGRESS_KEY = 'toggl_exporter:last_processed_index';
  * バッチ処理のコア関数
  * @param {boolean} isManual   手動実行なら true、定期実行なら false
  * @param {boolean} autoResume 手動実行時に自動再開する場合は true、タイムアウトで中断する場合は false
- * @param {boolean} forceInitial true の場合、キャッシュを無視して常に初回実行（過去30日分取得）とする
+ * @param {boolean} forceInitial true の場合、キャッシュを無視して初回実行（過去30日分取得）とする
  */
 function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
   forceInitial = forceInitial || false;
   
-  // モード別タイムアウト閾値の設定
+  // モード別タイムアウト閾値の設定（ms）
   var MAX_EXECUTION_TIME;
   if (isManual) {
     if (autoResume) {
@@ -254,7 +252,7 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
   var props = PropertiesService.getScriptProperties();
   var lastIndex = parseInt(props.getProperty(PROGRESS_KEY)) || 0;
   
-  // forceInitial が true の場合は初回実行
+  // forceInitial が true の場合は初回実行として扱う
   var lastModify = forceInitial ? -1 : getLastModifyDatetime();
   var now = new Date();
   var startDate;
@@ -277,7 +275,9 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
   log(LOG_LEVELS.INFO, "Number of time entries fetched: " + timeEntries.length);
   var totalCount = timeEntries.length;
   log(LOG_LEVELS.INFO, "Total records to process: " + totalCount);
-  log(LOG_LEVELS.INFO, "Processing starts from index " + lastIndex + " (" + new Date().toISOString() + ")");
+  
+  // 処理開始時の進捗ログ
+  log(LOG_LEVELS.INFO, "Processing starts from index " + lastIndex + " at " + new Date().toISOString());
   
   for (var i = lastIndex; i < totalCount; i++) {
     var record = timeEntries[i];
@@ -312,11 +312,6 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
       lastModify = stop_time;
     }
     
-    var processedCount = i + 1;
-    var percentComplete = Math.floor((processedCount / totalCount) * 100);
-    var remainingCount = totalCount - processedCount;
-    log(LOG_LEVELS.INFO, "Progress: Processed " + processedCount + " of " + totalCount + " (" + percentComplete + "%). Remaining: " + remainingCount + " records. Current record's stop date: " + record.stop);
-    
     var elapsed = new Date().getTime() - startTime;
     if (elapsed > MAX_EXECUTION_TIME) {
       props.setProperty(PROGRESS_KEY, i + 1);
@@ -335,7 +330,8 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
   
   putLastModifyDatetime(lastModify + 1);
   props.deleteProperty(PROGRESS_KEY);
-  log(LOG_LEVELS.INFO, "全エントリの処理が完了しました。");
+  // 処理完了時の進捗ログ
+  log(LOG_LEVELS.INFO, "Processing complete: Processed all " + totalCount + " records at " + new Date().toISOString());
 }
 
 /**
@@ -360,7 +356,7 @@ function manualProcessTimeEntriesComplete() {
 }
 
 /**
- * 手動実行（初回実行モード）：常に初回実行として開始（キャッシュ無視）
+ * 手動実行（初回実行モード）：キャッシュ無視で常に初回実行
  */
 function manualProcessTimeEntriesInitial() {
   PropertiesService.getScriptProperties().deleteProperty(PROGRESS_KEY);
