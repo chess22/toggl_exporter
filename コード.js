@@ -8,10 +8,11 @@
 
   CHANGELOG:
     v1.4.02-modified (2025/02/01):
-      - タイムアウト対策として、処理中に進捗を保存し途中再開する仕組みを追加
-      - 手動実行モードとして、タイムアウトで中断する（1分区切り）、完遂（自動再開）および常に初回実行（キャッシュ無視）モードを選択可能に実装
+      - タイムアウト対策として、進捗保存および途中再開の仕組みを追加
+      - 手動実行モードを3種類実装：タイムアウトモード（1分区切り）、完遂モード（自動再開、5分30秒）、初回実行モード（キャッシュ無視）
       - 手動完遂モードのタイムアウト閾値を6分から5分30秒（330,000ms）に変更
       - 初回実行時の進捗状況は、処理の最初と完了時にのみ出力するよう改良
+      - 自動実行モードのエントリポイントを「watch」として統一
 */
 
 /** CONFIG: 基本設定 **/
@@ -22,7 +23,9 @@ const CONFIG = {
   GOOGLE_CALENDAR_ID: PropertiesService.getScriptProperties().getProperty('GOOGLE_CALENDAR_ID'),
   NOTIFICATION_EMAIL: PropertiesService.getScriptProperties().getProperty('NOTIFICATION_EMAIL'),
   TOGGL_BASIC_AUTH: PropertiesService.getScriptProperties().getProperty('TOGGL_BASIC_AUTH'),
+  
   DEBUG_MODE: false,  // DEBUG_MODE を true にすると、DEBUGレベルの詳細ログも出力されます（本番環境では false）
+  
   MAX_CACHE_AGE: 12 * 60 * 60, // 12時間（秒）
   RETRY_COUNT: 5,
   RETRY_DELAY: 2000, // ms
@@ -78,14 +81,14 @@ function putLastModifyDatetime(timestamp) {
 /** retry ユーティリティ関数 **/
 function retry(fn, retries, delay) {
   for (var i = 0; i < retries; i++) {
-    try {
-      return fn();
+    try { 
+      return fn(); 
     } catch (e) {
       if (i < retries - 1) {
         log(LOG_LEVELS.DEBUG, "リトライ中 (" + (i + 1) + "/" + retries + ") - エラー: " + e.message);
         Utilities.sleep(delay);
-      } else {
-        throw e;
+      } else { 
+        throw e; 
       }
     }
   }
@@ -111,11 +114,11 @@ function getTimeEntriesRange(startIso, endIso) {
       throw new Error("Toggl API returned status code " + responseCode);
     }
     var parsed = JSON.parse(responseText);
-    if (Array.isArray(parsed)) {
-      return parsed;
-    } else {
+    if (Array.isArray(parsed)) { 
+      return parsed; 
+    } else { 
       log(LOG_LEVELS.ERROR, "API returned non-array response");
-      return null;
+      return null; 
     }
   }, CONFIG.RETRY_COUNT, CONFIG.RETRY_DELAY);
 }
@@ -147,8 +150,12 @@ function recordActivityLog(title, started_at, ended_at) {
   }
 }
 
-/** 既存イベントの検索と更新（重複防止） **/
+/** 既存イベントの検索と更新（重複防止）― IDが存在する場合を対象とする **/
 function eventExistsAndUpdate(record_id, newRecord) {
+  if (!record_id) {
+    // IDが無い場合は、従来の動作（新規登録）とする
+    return false;
+  }
   var calendar = CalendarApp.getCalendarById(CONFIG.GOOGLE_CALENDAR_ID);
   var now = new Date();
   var pastDate = new Date(now.getFullYear(), now.getMonth() - 3, now.getDate());
@@ -183,7 +190,7 @@ function eventExistsAndUpdate(record_id, newRecord) {
           }, CONFIG.RETRY_COUNT, CONFIG.RETRY_DELAY);
           log(LOG_LEVELS.INFO, "Updated event for ID:" + record_id);
         } catch (e) {
-          log(LOG_LEVELS.ERROR, "Error updating event for ID: " + record_id + " - " + e);
+          log(LOG_LEVELS.ERROR, "Error updating event for ID:" + record_id + " - " + e);
           notifyError(e, record_id);
           return false;
         }
@@ -236,23 +243,17 @@ const PROGRESS_KEY = 'toggl_exporter:last_processed_index';
 function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
   forceInitial = forceInitial || false;
   
-  // モード別タイムアウト閾値の設定（ms）
   var MAX_EXECUTION_TIME;
   if (isManual) {
-    if (autoResume) {
-      MAX_EXECUTION_TIME = CONFIG.MANUAL_COMPLETE_TIMEOUT_INTERVAL;  // 手動完遂モード：5分30秒
-    } else {
-      MAX_EXECUTION_TIME = CONFIG.MANUAL_TIMEOUT_MODE_INTERVAL;       // 手動タイムアウトモード：1分
-    }
+    MAX_EXECUTION_TIME = autoResume ? CONFIG.MANUAL_COMPLETE_TIMEOUT_INTERVAL : CONFIG.MANUAL_TIMEOUT_MODE_INTERVAL;
   } else {
-    MAX_EXECUTION_TIME = CONFIG.AUTOMATIC_TIMEOUT_INTERVAL;             // 自動実行：4分
+    MAX_EXECUTION_TIME = CONFIG.AUTOMATIC_TIMEOUT_INTERVAL;
   }
   
   var startTime = new Date().getTime();
   var props = PropertiesService.getScriptProperties();
   var lastIndex = parseInt(props.getProperty(PROGRESS_KEY)) || 0;
   
-  // forceInitial が true の場合は初回実行として扱う
   var lastModify = forceInitial ? -1 : getLastModifyDatetime();
   var now = new Date();
   var startDate;
@@ -275,8 +276,6 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
   log(LOG_LEVELS.INFO, "Number of time entries fetched: " + timeEntries.length);
   var totalCount = timeEntries.length;
   log(LOG_LEVELS.INFO, "Total records to process: " + totalCount);
-  
-  // 処理開始時の進捗ログ
   log(LOG_LEVELS.INFO, "Processing starts from index " + lastIndex + " at " + new Date().toISOString());
   
   for (var i = lastIndex; i < totalCount; i++) {
@@ -315,9 +314,16 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
     var elapsed = new Date().getTime() - startTime;
     if (elapsed > MAX_EXECUTION_TIME) {
       props.setProperty(PROGRESS_KEY, i + 1);
+      var processedCount = i + 1;
+      var percentComplete = Math.floor((processedCount / totalCount) * 100);
+      var remainingCount = totalCount - processedCount;
+      log(LOG_LEVELS.INFO, "Timeout reached: Processed " + processedCount + " of " + totalCount +
+          " (" + percentComplete + "%). Remaining: " + remainingCount +
+          " records. Current record's stop date: " + record.stop);
+      
       if (!isManual || (isManual && autoResume)) {
         log(LOG_LEVELS.INFO, (isManual ? "手動完遂" : "自動実行") + ": 閾値に達したため中断します。Next start index: " + (i + 1));
-        ScriptApp.newTrigger('automaticProcessTimeEntries')
+        ScriptApp.newTrigger('watch')
           .timeBased()
           .after(1000)
           .create();
@@ -330,14 +336,13 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
   
   putLastModifyDatetime(lastModify + 1);
   props.deleteProperty(PROGRESS_KEY);
-  // 処理完了時の進捗ログ
   log(LOG_LEVELS.INFO, "Processing complete: Processed all " + totalCount + " records at " + new Date().toISOString());
 }
 
 /**
- * 自動実行用エントリポイント（トリガー経由）
+ * 自動実行用エントリポイント（watch） — トリガー経由で呼ばれる
  */
-function automaticProcessTimeEntries() {
+function watch() {
   processTimeEntriesBatch(false, true, false);
 }
 
