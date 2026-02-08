@@ -644,14 +644,14 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
 
         if (!isManual || (isManual && autoResume)) {
           log(LOG_LEVELS.INFO, (isManual ? "手動完遂" : "自動実行") + ": 閾値に達したため中断します。Last processed record ID: " + record.id);
-          // 既存のワンタイムトリガーを削除してから新規作成（トリガー蓄積防止）
+          // watchResume経由で再開（定期実行のwatchトリガーに影響しない）
+          // 既存のwatchResumeトリガーを削除してから新規作成（蓄積防止）
           ScriptApp.getProjectTriggers().forEach(function(trigger) {
-            if (trigger.getHandlerFunction() === 'watch' &&
-                trigger.getTriggerSource() === ScriptApp.TriggerSource.CLOCK) {
+            if (trigger.getHandlerFunction() === 'watchResume') {
               ScriptApp.deleteTrigger(trigger);
             }
           });
-          ScriptApp.newTrigger('watch')
+          ScriptApp.newTrigger('watchResume')
             .timeBased()
             .after(1000)
             .create();
@@ -674,9 +674,18 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
 }
 
 /**
- * 自動実行用エントリポイント（watch） — トリガー経由で呼ばれる
+ * 自動実行用エントリポイント（watch） — 定期トリガー経由で呼ばれる
  */
 function watch() {
+  processTimeEntriesBatch(false, true, false);
+}
+
+/**
+ * タイムアウト後の自動再開用エントリポイント
+ * watchと同じ処理だが、定期トリガーと分離することで
+ * トリガー削除時に定期実行のwatchトリガーに影響しない
+ */
+function watchResume() {
   processTimeEntriesBatch(false, true, false);
 }
 
