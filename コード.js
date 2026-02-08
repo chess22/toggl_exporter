@@ -579,6 +579,11 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
     log(LOG_LEVELS.INFO, "Number of time entries fetched: " + timeEntries.length);
     const totalCount = timeEntries.length;
     log(LOG_LEVELS.INFO, "Total records to process: " + totalCount);
+    if (totalCount === 0) {
+      props.deleteProperty(PROGRESS_KEY);
+      log(LOG_LEVELS.INFO, "No records to process. Skipping cache update.");
+      return;
+    }
 
     // 前回中断時のレコードIDから再開位置を特定
     let startIndex = 0;
@@ -662,7 +667,11 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
       }
     }
     
-    putLastModifyDatetime(lastModify + 1);
+    if (lastModify > 0) {
+      putLastModifyDatetime(lastModify + 1);
+    } else {
+      log(LOG_LEVELS.INFO, "No valid lastModify found. Skipping cache update.");
+    }
     props.deleteProperty(PROGRESS_KEY);
     log(LOG_LEVELS.INFO, "Processing complete: Processed all " + totalCount + " records at " + new Date().toISOString());
   } finally {

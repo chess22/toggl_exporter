@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## [1.4.05] - 2026-02-08
+
+### Fixed / 修正
+- **空データ時のlastModify更新を抑止**: 取得件数0件のときに `timestamp=0` が保存される問題を修正
+  (Avoid updating lastModify when there are zero entries to prevent saving `timestamp=0`)
+
+---
+
 ## [1.4.04] - 2026-02-08
 
 ### Fixed / 修正
