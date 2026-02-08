@@ -40,7 +40,7 @@ This project is a Google Apps Script based on Masato Kawaguchi's [Toggl Exporter
 
 ## バージョン情報 / Version Info
 
-- **最新バージョン / Latest Version:** 1.4.03 (2025-02-01)
+- **最新バージョン / Latest Version:** 1.4.04 (2026-02-08)
 
 ### 変更点 / Changelog Highlights
 - 初回実行時の分割取得・進捗保存機能を追加  
@@ -77,7 +77,7 @@ clasp clone <YOUR_SCRIPT_ID>
 
 3. **スクリプトプロパティの設定 / Set Script Properties**
 
-• TOGGL_BASIC_AUTH: Toggl API トークン (Base64認証情報)
+• TOGGL_BASIC_AUTH: Toggl API トークン（Base64エンコード済みの値を設定。`{API_TOKEN}:api_token` をBase64エンコードした文字列）
 
 • GOOGLE_CALENDAR_ID: 同期先の Google カレンダー ID
 

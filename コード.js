@@ -3,7 +3,7 @@
   original author: Masato Kawaguchi
   modified by: chess
   Released under the BSD-3-Clause license
-  version: 1.4.03
+  version: 1.4.04
   https://github.com/mkawaguchi/toggl_exporter/blob/master/LICENSE
 
   CHANGELOG:
@@ -34,6 +34,9 @@ const CONFIG = {
   MANUAL_TIMEOUT_MODE_INTERVAL: 60000           // 手動タイムアウトモード：1分
 };
 
+// 実行内のプロジェクト取得をメモ化
+const PROJECT_CACHE = {};
+
 /** ログレベル **/
 const LOG_LEVELS = {
   DEBUG: 1,
@@ -48,6 +51,27 @@ const CURRENT_LOG_LEVEL = CONFIG.DEBUG_MODE ? LOG_LEVELS.DEBUG : LOG_LEVELS.INFO
 function log(level, message) {
   if (level >= CURRENT_LOG_LEVEL) {
     Logger.log(message);
+  }
+}
+
+/**
+ * エラー通知用関数
+ * 設定されたメールアドレスにエラー内容を送信する
+ * NOTIFICATION_EMAIL が未設定の場合はログ出力のみ
+ */
+function notifyError(error, recordId) {
+  const email = CONFIG.NOTIFICATION_EMAIL;
+  const subject = 'toggl_exporter エラー通知';
+  const body = `エラーが発生しました。\n\nRecord ID: ${recordId || 'N/A'}\nError: ${error}\n\n時刻: ${new Date().toISOString()}`;
+  if (email) {
+    try {
+      MailApp.sendEmail(email, subject, body);
+      log(LOG_LEVELS.INFO, `Error notification sent to: ${email}`);
+    } catch (mailError) {
+      log(LOG_LEVELS.ERROR, `Failed to send error notification: ${mailError}`);
+    }
+  } else {
+    log(LOG_LEVELS.ERROR, `notifyError called but NOTIFICATION_EMAIL is not configured. Error: ${error}`);
   }
 }
 
@@ -151,17 +175,17 @@ function getTimeEntriesRange(startIso, endIso) {
       headers: { "Authorization": "Basic " + CONFIG.TOGGL_BASIC_AUTH },
       muteHttpExceptions: true
     });
-    
+
     const responseCode = response.getResponseCode();
     const responseText = response.getContentText();
     log(LOG_LEVELS.DEBUG, `API Response Code: ${responseCode}`);
-    log(LOG_LEVELS.DEBUG, `API Response: ${responseText}`);
-    
+    log(LOG_LEVELS.DEBUG, `API Response (first 1000 chars): ${responseText.slice(0, 1000)}`);
+
     if (responseCode !== 200) {
       log(LOG_LEVELS.ERROR, `API Error: ${responseText}`);
       throw new Error(`Toggl API returned status code ${responseCode}`);
     }
-    
+
     const parsed = JSON.parse(responseText);
     if (Array.isArray(parsed)) {
       return parsed;
@@ -237,14 +261,18 @@ function eventExistsAndUpdate(record_id, newRecord) {
       const newStart = newRecord.start;
       const newEnd = newRecord.stop;
       
-      const project_data = getProjectData(newRecord.wid, newRecord.pid);
+      const project_data = getProjectData(newRecord.workspace_id, newRecord.project_id);
       const project_name = project_data.name || '';
       const updatedTitle = [(newRecord.description || '名称なし'), project_name]
         .filter(Boolean).join(" : ") + ` ID:${record_id}`;
       
       const eventTitleNeedsUpdate = (matchingEvent.getTitle() !== updatedTitle);
-      const eventTimeNeedsUpdate = (matchingEvent.getStartTime().toISOString() !== newStart) ||
-                                     (matchingEvent.getEndTime().toISOString() !== newEnd);
+      // ミリ秒で比較（toISOString()だとタイムゾーン表記差 Z vs +09:00 で不一致になるため）
+      const newStartDate = new Date(newStart);
+      const newEndDate = new Date(newEnd);
+      const eventTimeNeedsUpdate =
+        matchingEvent.getStartTime().getTime() !== newStartDate.getTime() ||
+        matchingEvent.getEndTime().getTime() !== newEndDate.getTime();
       
       log(LOG_LEVELS.DEBUG, `EventTitleNeedsUpdate: ${eventTitleNeedsUpdate}, EventTimeNeedsUpdate: ${eventTimeNeedsUpdate}`);
       
@@ -276,6 +304,10 @@ function eventExistsAndUpdate(record_id, newRecord) {
  */
 function getProjectData(workspace_id, project_id) {
   if (!workspace_id || !project_id) return {};
+  const cacheKey = `${workspace_id}:${project_id}`;
+  if (Object.prototype.hasOwnProperty.call(PROJECT_CACHE, cacheKey)) {
+    return PROJECT_CACHE[cacheKey];
+  }
   return retry(() => {
     const uri = `${CONFIG.TOGGL_API_HOSTNAME}/api/v9/workspaces/${workspace_id}/projects/${project_id}`;
     
@@ -284,18 +316,20 @@ function getProjectData(workspace_id, project_id) {
       headers: { "Authorization": "Basic " + CONFIG.TOGGL_BASIC_AUTH },
       muteHttpExceptions: true
     });
-    
+
     const responseCode = response.getResponseCode();
     const responseText = response.getContentText();
     log(LOG_LEVELS.DEBUG, `Project API Response Code: ${responseCode}`);
-    log(LOG_LEVELS.DEBUG, `Project API Response: ${responseText}`);
+    log(LOG_LEVELS.DEBUG, `Project API Response (first 1000 chars): ${responseText.slice(0, 1000)}`);
     
     if (responseCode !== 200) {
       log(LOG_LEVELS.ERROR, `Project API Error: ${responseText}`);
       return {};
     }
     
-    return JSON.parse(responseText);
+    const parsed = JSON.parse(responseText);
+    PROJECT_CACHE[cacheKey] = parsed;
+    return parsed;
   }, CONFIG.RETRY_COUNT, CONFIG.RETRY_DELAY);
 }
 
@@ -327,28 +361,30 @@ function checkIfTogglEntryExists(record_id) {
  * - 通常トリガー等で用い、低負荷運用
  */
 function deleteRemovedEntriesShort() {
-  return retry(() => {
-    const calendar = CalendarApp.getCalendarById(CONFIG.GOOGLE_CALENDAR_ID);
-    if (!calendar) {
-      throw new Error(`Invalid GOOGLE_CALENDAR_ID: "${CONFIG.GOOGLE_CALENDAR_ID}"`);
-    }
-    const now = new Date();
-    const oneDayMs = 1 * 24 * 60 * 60 * 1000;
-    const pastDate = new Date(now.getTime() - oneDayMs);
-    const events = calendar.getEvents(pastDate, now);
-    events.forEach(function(event) {
-      const title = event.getTitle();
-      const match = title.match(/ID:(\d+)$/);
-      if (match && match[1]) {
-        const record_id = match[1];
+  const calendar = CalendarApp.getCalendarById(CONFIG.GOOGLE_CALENDAR_ID);
+  if (!calendar) {
+    throw new Error(`Invalid GOOGLE_CALENDAR_ID: "${CONFIG.GOOGLE_CALENDAR_ID}"`);
+  }
+  const now = new Date();
+  const oneDayMs = 1 * 24 * 60 * 60 * 1000;
+  const pastDate = new Date(now.getTime() - oneDayMs);
+  const events = calendar.getEvents(pastDate, now);
+  events.forEach(function(event) {
+    const title = event.getTitle();
+    const match = title.match(/ID:(\d+)$/);
+    if (match && match[1]) {
+      const record_id = match[1];
+      try {
         const exists = checkIfTogglEntryExists(record_id);
         if (!exists) {
           event.deleteEvent();
           log(LOG_LEVELS.INFO, `Deleted event (short range) for removed Toggl entry ID:${record_id}`);
         }
+      } catch (e) {
+        log(LOG_LEVELS.ERROR, `Error checking/deleting entry ID:${record_id} - ${e}`);
       }
-    });
-  }, CONFIG.RETRY_COUNT, CONFIG.RETRY_DELAY);
+    }
+  });
 }
 
 /**
@@ -356,54 +392,59 @@ function deleteRemovedEntriesShort() {
  * - 手動実行用、より古い削除を拾うため
  */
 function deleteRemovedEntriesManual() {
-  return retry(() => {
-    const calendar = CalendarApp.getCalendarById(CONFIG.GOOGLE_CALENDAR_ID);
-    if (!calendar) {
-      throw new Error(`Invalid GOOGLE_CALENDAR_ID: "${CONFIG.GOOGLE_CALENDAR_ID}"`);
-    }
-    const now = new Date();
-    const pastDate = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
-    const events = calendar.getEvents(pastDate, now);
-    events.forEach(function(event) {
-      const title = event.getTitle();
-      const match = title.match(/ID:(\d+)$/);
-      if (match && match[1]) {
-        const record_id = match[1];
+  const calendar = CalendarApp.getCalendarById(CONFIG.GOOGLE_CALENDAR_ID);
+  if (!calendar) {
+    throw new Error(`Invalid GOOGLE_CALENDAR_ID: "${CONFIG.GOOGLE_CALENDAR_ID}"`);
+  }
+  const now = new Date();
+  const pastDate = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
+  const events = calendar.getEvents(pastDate, now);
+  events.forEach(function(event) {
+    const title = event.getTitle();
+    const match = title.match(/ID:(\d+)$/);
+    if (match && match[1]) {
+      const record_id = match[1];
+      try {
         const exists = checkIfTogglEntryExists(record_id);
         if (!exists) {
           event.deleteEvent();
           log(LOG_LEVELS.INFO, `Deleted event (manual range) for removed Toggl entry ID:${record_id}`);
         }
+      } catch (e) {
+        log(LOG_LEVELS.ERROR, `Error checking/deleting entry ID:${record_id} - ${e}`);
       }
-    });
-  }, CONFIG.RETRY_COUNT, CONFIG.RETRY_DELAY);
+    }
+  });
 }
 
 /**
  * 重複イベントを削除する (過去3ヶ月)
- * - 同じIDを持つ複数イベントがある場合、最新以外を削除
+ * - 同じIDを持つ複数イベントがある場合、最新（最後に登録された）もの以外を削除
+ * - getEventsは時系列順で返すため、後に出現するものが最新
  */
 function removeDuplicateEvents() {
-  return retry(() => {
-    const calendar = CalendarApp.getCalendarById(CONFIG.GOOGLE_CALENDAR_ID);
-    const now = new Date();
-    const pastDate = new Date(now.getFullYear(), now.getMonth() - 3, now.getDate());
-    const events = calendar.getEvents(pastDate, now);
-    const eventMap = {};
-    events.forEach(function(event) {
-      const title = event.getTitle();
-      const match = title.match(/ID:(\d+)$/);
-      if (match && match[1]) {
-        const record_id = match[1];
-        if (eventMap[record_id]) {
-          event.deleteEvent();
-          log(LOG_LEVELS.INFO, `Deleted duplicate event for ID:${record_id}`);
-        } else {
-          eventMap[record_id] = event;
+  const calendar = CalendarApp.getCalendarById(CONFIG.GOOGLE_CALENDAR_ID);
+  const now = new Date();
+  const pastDate = new Date(now.getFullYear(), now.getMonth() - 3, now.getDate());
+  const events = calendar.getEvents(pastDate, now);
+  const eventMap = {};
+  events.forEach(function(event) {
+    const title = event.getTitle();
+    const match = title.match(/ID:(\d+)$/);
+    if (match && match[1]) {
+      const record_id = match[1];
+      if (eventMap[record_id]) {
+        // 古い方（先に登録されたもの）を削除し、最新を保持
+        try {
+          eventMap[record_id].deleteEvent();
+          log(LOG_LEVELS.INFO, `Deleted older duplicate event for ID:${record_id}`);
+        } catch (e) {
+          log(LOG_LEVELS.ERROR, `Error deleting duplicate event for ID:${record_id} - ${e}`);
         }
       }
-    });
-  }, CONFIG.RETRY_COUNT, CONFIG.RETRY_DELAY);
+      eventMap[record_id] = event;
+    }
+  });
 }
 
 /**
@@ -440,15 +481,15 @@ function clearScriptCache() {
  */
 function testCreateDuplicateEvents() {
   try {
-    var now = new Date();
-    var oneHourLater = new Date(now.getTime() + 60 * 60 * 1000);
-    var twoHoursLater = new Date(now.getTime() + 2 * 60 * 60 * 1000);
-    var title = "テストイベント ID:654321";
-    
+    const now = new Date();
+    const oneHourLater = new Date(now.getTime() + 60 * 60 * 1000);
+    const twoHoursLater = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+    const title = "テストイベント ID:654321";
+
     recordActivityLog(title, oneHourLater.toISOString(), twoHoursLater.toISOString());
-    
-    var threeHoursLater = new Date(now.getTime() + 3 * 60 * 60 * 1000);
-    var fourHoursLater  = new Date(now.getTime() + 4 * 60 * 60 * 1000);
+
+    const threeHoursLater = new Date(now.getTime() + 3 * 60 * 60 * 1000);
+    const fourHoursLater  = new Date(now.getTime() + 4 * 60 * 60 * 1000);
     recordActivityLog(title, threeHoursLater.toISOString(), fourHoursLater.toISOString());
     
     log(LOG_LEVELS.INFO, "重複イベント作成テスト成功");
@@ -498,7 +539,8 @@ function testDuplicateEventsWorkflow() {
  */
 
 // 進捗管理用のキー（Script Properties を利用）
-const PROGRESS_KEY = 'toggl_exporter:last_processed_index';
+// 最後に処理したレコードIDで再開位置を特定（インデックスだとデータ変動時にずれるため）
+const PROGRESS_KEY = 'toggl_exporter:last_processed_record_id';
 
 /**
  * バッチ処理のコア関数
@@ -508,25 +550,25 @@ const PROGRESS_KEY = 'toggl_exporter:last_processed_index';
  */
 function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
   forceInitial = forceInitial || false;
-  
+
   // ロックを取得（同時実行防止）
-  let lock = getLock();
+  const lock = getLock();
   try {
     // モード別タイムアウト閾値の設定（ミリ秒）
-    var MAX_EXECUTION_TIME;
+    let MAX_EXECUTION_TIME;
     if (isManual) {
       MAX_EXECUTION_TIME = autoResume ? CONFIG.MANUAL_COMPLETE_TIMEOUT_INTERVAL : CONFIG.MANUAL_TIMEOUT_MODE_INTERVAL;
     } else {
       MAX_EXECUTION_TIME = CONFIG.AUTOMATIC_TIMEOUT_INTERVAL;
     }
-    
-    var startTime = new Date().getTime();
-    var props = PropertiesService.getScriptProperties();
-    var lastIndex = parseInt(props.getProperty(PROGRESS_KEY)) || 0;
-    
-    var lastModify = forceInitial ? -1 : getLastModifyDatetime();
-    var now = new Date();
-    var startDate;
+
+    const startTime = new Date().getTime();
+    const props = PropertiesService.getScriptProperties();
+    const lastProcessedId = props.getProperty(PROGRESS_KEY) || null;
+
+    let lastModify = forceInitial ? -1 : getLastModifyDatetime();
+    const now = new Date();
+    let startDate;
     if (lastModify === -1) {
       startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
       log(LOG_LEVELS.INFO, "初回実行: 過去30日分のデータを取得します");
@@ -534,39 +576,75 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
       startDate = new Date((lastModify - 24 * 60 * 60) * 1000);
       log(LOG_LEVELS.INFO, "継続実行: キャッシュのタイムスタンプに基づいてデータ取得を行います");
     }
-    
-    var startIso = startDate.toISOString();
-    var endIso = now.toISOString();
-    
-    var timeEntries = getTimeEntriesRange(startIso, endIso);
+
+    const startIso = startDate.toISOString();
+    const endIso = now.toISOString();
+
+    const timeEntries = getTimeEntriesRange(startIso, endIso);
     if (!timeEntries) {
       log(LOG_LEVELS.ERROR, "タイムエントリの取得に失敗しました");
       return;
     }
-    log(LOG_LEVELS.INFO, "Number of time entries fetched: " + timeEntries.length);
-    var totalCount = timeEntries.length;
+    const timeEntriesSorted = timeEntries.slice().sort(function(a, b) {
+      const aStop = a && a.stop ? new Date(a.stop).getTime() : Number.POSITIVE_INFINITY;
+      const bStop = b && b.stop ? new Date(b.stop).getTime() : Number.POSITIVE_INFINITY;
+      return aStop - bStop;
+    });
+    log(LOG_LEVELS.INFO, "Number of time entries fetched: " + timeEntriesSorted.length);
+    const totalCount = timeEntriesSorted.length;
     log(LOG_LEVELS.INFO, "Total records to process: " + totalCount);
-    log(LOG_LEVELS.INFO, "Processing starts from index " + lastIndex + " at " + new Date().toISOString());
-    
-    for (var i = lastIndex; i < totalCount; i++) {
-      var record = timeEntries[i];
+    if (totalCount === 0) {
+      props.deleteProperty(PROGRESS_KEY);
+      log(LOG_LEVELS.INFO, "No records to process. Skipping cache update.");
+      return;
+    }
+
+    // 前回中断時のレコードIDから再開位置を特定
+    let startIndex = 0;
+    let foundLastProcessed = false;
+    if (lastProcessedId) {
+      for (let j = 0; j < totalCount; j++) {
+        if (String(timeEntriesSorted[j].id) === lastProcessedId) {
+          startIndex = j + 1;
+          foundLastProcessed = true;
+          break;
+        }
+      }
+      log(LOG_LEVELS.INFO, "Resuming from index " + startIndex + " (after record ID:" + lastProcessedId + ")");
+    }
+    if (lastProcessedId && !foundLastProcessed && lastModify > 0) {
+      for (let j = 0; j < totalCount; j++) {
+        const record = timeEntriesSorted[j];
+        if (!record.stop) continue;
+        const stop_time = Math.floor(new Date(record.stop).getTime() / 1000);
+        if (stop_time > lastModify) {
+          startIndex = j;
+          break;
+        }
+      }
+      log(LOG_LEVELS.INFO, "Last processed ID not found. Fallback resume index: " + startIndex + " (lastModify: " + lastModify + ")");
+    }
+    log(LOG_LEVELS.INFO, "Processing starts from index " + startIndex + " at " + new Date().toISOString());
+
+    for (let i = startIndex; i < totalCount; i++) {
+      const record = timeEntriesSorted[i];
       if (!record.stop) {
         log(LOG_LEVELS.DEBUG, "Record with no stop time: " + JSON.stringify(record));
         continue;
       }
-      
-      var stop_time = Math.floor(new Date(record.stop).getTime() / 1000);
-      var start_time = Math.floor(new Date(record.start).getTime() / 1000);
+
+      const stop_time = Math.floor(new Date(record.stop).getTime() / 1000);
+      const start_time = Math.floor(new Date(record.start).getTime() / 1000);
       if (isNaN(stop_time) || isNaN(start_time)) {
         log(LOG_LEVELS.DEBUG, "Invalid time for record: " + JSON.stringify(record));
         continue;
       }
-      
+
       try {
         if (!eventExistsAndUpdate(record.id, record)) {
-          var project_data = getProjectData(record.wid, record.pid);
-          var project_name = project_data.name || '';
-          var activity_log = [(record.description || '名称なし'), project_name]
+          const project_data = getProjectData(record.workspace_id, record.project_id);
+          const project_name = project_data.name || '';
+          const activity_log = [(record.description || '名称なし'), project_name]
             .filter(Boolean).join(" : ") + " ID:" + record.id;
           recordActivityLog(activity_log, record.start, record.stop);
           log(LOG_LEVELS.INFO, "Added event: " + activity_log);
@@ -577,24 +655,36 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
         log(LOG_LEVELS.ERROR, "Error processing record ID:" + record.id + " - " + e);
         notifyError(e, record.id);
       }
-      
+
       if (stop_time > lastModify) {
         lastModify = stop_time;
       }
-      
-      var elapsed = new Date().getTime() - startTime;
+
+      const elapsed = new Date().getTime() - startTime;
       if (elapsed > MAX_EXECUTION_TIME) {
-        props.setProperty(PROGRESS_KEY, i + 1);
-        var processedCount = i + 1;
-        var percentComplete = Math.floor((processedCount / totalCount) * 100);
-        var remainingCount = totalCount - processedCount;
+        props.setProperty(PROGRESS_KEY, String(record.id));
+        const processedCount = i + 1;
+        const percentComplete = Math.floor((processedCount / totalCount) * 100);
+        const remainingCount = totalCount - processedCount;
         log(LOG_LEVELS.INFO, "Timeout reached: Processed " + processedCount + " of " + totalCount +
             " (" + percentComplete + "%). Remaining: " + remainingCount +
             " records. Current record's stop date: " + record.stop);
         
+        // タイムアウト中断時もlastModifyを保存し、次回取得範囲を最新化
+        if (lastModify > 0) {
+          putLastModifyDatetime(lastModify);
+        }
+
         if (!isManual || (isManual && autoResume)) {
-          log(LOG_LEVELS.INFO, (isManual ? "手動完遂" : "自動実行") + ": 閾値に達したため中断します。Next start index: " + (i + 1));
-          ScriptApp.newTrigger('watch')
+          log(LOG_LEVELS.INFO, (isManual ? "手動完遂" : "自動実行") + ": 閾値に達したため中断します。Last processed record ID: " + record.id);
+          // watchResume経由で再開（定期実行のwatchトリガーに影響しない）
+          // 既存のwatchResumeトリガーを削除してから新規作成（蓄積防止）
+          ScriptApp.getProjectTriggers().forEach(function(trigger) {
+            if (trigger.getHandlerFunction() === 'watchResume') {
+              ScriptApp.deleteTrigger(trigger);
+            }
+          });
+          ScriptApp.newTrigger('watchResume')
             .timeBased()
             .after(1000)
             .create();
@@ -605,7 +695,11 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
       }
     }
     
-    putLastModifyDatetime(lastModify + 1);
+    if (lastModify > 0) {
+      putLastModifyDatetime(lastModify + 1);
+    } else {
+      log(LOG_LEVELS.INFO, "No valid lastModify found. Skipping cache update.");
+    }
     props.deleteProperty(PROGRESS_KEY);
     log(LOG_LEVELS.INFO, "Processing complete: Processed all " + totalCount + " records at " + new Date().toISOString());
   } finally {
@@ -617,9 +711,18 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
 }
 
 /**
- * 自動実行用エントリポイント（watch） — トリガー経由で呼ばれる
+ * 自動実行用エントリポイント（watch） — 定期トリガー経由で呼ばれる
  */
 function watch() {
+  processTimeEntriesBatch(false, true, false);
+}
+
+/**
+ * タイムアウト後の自動再開用エントリポイント
+ * watchと同じ処理だが、定期トリガーと分離することで
+ * トリガー削除時に定期実行のwatchトリガーに影響しない
+ */
+function watchResume() {
   processTimeEntriesBatch(false, true, false);
 }
 
