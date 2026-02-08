@@ -348,28 +348,30 @@ function checkIfTogglEntryExists(record_id) {
  * - 通常トリガー等で用い、低負荷運用
  */
 function deleteRemovedEntriesShort() {
-  return retry(() => {
-    const calendar = CalendarApp.getCalendarById(CONFIG.GOOGLE_CALENDAR_ID);
-    if (!calendar) {
-      throw new Error(`Invalid GOOGLE_CALENDAR_ID: "${CONFIG.GOOGLE_CALENDAR_ID}"`);
-    }
-    const now = new Date();
-    const oneDayMs = 1 * 24 * 60 * 60 * 1000;
-    const pastDate = new Date(now.getTime() - oneDayMs);
-    const events = calendar.getEvents(pastDate, now);
-    events.forEach(function(event) {
-      const title = event.getTitle();
-      const match = title.match(/ID:(\d+)$/);
-      if (match && match[1]) {
-        const record_id = match[1];
+  const calendar = CalendarApp.getCalendarById(CONFIG.GOOGLE_CALENDAR_ID);
+  if (!calendar) {
+    throw new Error(`Invalid GOOGLE_CALENDAR_ID: "${CONFIG.GOOGLE_CALENDAR_ID}"`);
+  }
+  const now = new Date();
+  const oneDayMs = 1 * 24 * 60 * 60 * 1000;
+  const pastDate = new Date(now.getTime() - oneDayMs);
+  const events = calendar.getEvents(pastDate, now);
+  events.forEach(function(event) {
+    const title = event.getTitle();
+    const match = title.match(/ID:(\d+)$/);
+    if (match && match[1]) {
+      const record_id = match[1];
+      try {
         const exists = checkIfTogglEntryExists(record_id);
         if (!exists) {
           event.deleteEvent();
           log(LOG_LEVELS.INFO, `Deleted event (short range) for removed Toggl entry ID:${record_id}`);
         }
+      } catch (e) {
+        log(LOG_LEVELS.ERROR, `Error checking/deleting entry ID:${record_id} - ${e}`);
       }
-    });
-  }, CONFIG.RETRY_COUNT, CONFIG.RETRY_DELAY);
+    }
+  });
 }
 
 /**
@@ -377,27 +379,29 @@ function deleteRemovedEntriesShort() {
  * - 手動実行用、より古い削除を拾うため
  */
 function deleteRemovedEntriesManual() {
-  return retry(() => {
-    const calendar = CalendarApp.getCalendarById(CONFIG.GOOGLE_CALENDAR_ID);
-    if (!calendar) {
-      throw new Error(`Invalid GOOGLE_CALENDAR_ID: "${CONFIG.GOOGLE_CALENDAR_ID}"`);
-    }
-    const now = new Date();
-    const pastDate = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
-    const events = calendar.getEvents(pastDate, now);
-    events.forEach(function(event) {
-      const title = event.getTitle();
-      const match = title.match(/ID:(\d+)$/);
-      if (match && match[1]) {
-        const record_id = match[1];
+  const calendar = CalendarApp.getCalendarById(CONFIG.GOOGLE_CALENDAR_ID);
+  if (!calendar) {
+    throw new Error(`Invalid GOOGLE_CALENDAR_ID: "${CONFIG.GOOGLE_CALENDAR_ID}"`);
+  }
+  const now = new Date();
+  const pastDate = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
+  const events = calendar.getEvents(pastDate, now);
+  events.forEach(function(event) {
+    const title = event.getTitle();
+    const match = title.match(/ID:(\d+)$/);
+    if (match && match[1]) {
+      const record_id = match[1];
+      try {
         const exists = checkIfTogglEntryExists(record_id);
         if (!exists) {
           event.deleteEvent();
           log(LOG_LEVELS.INFO, `Deleted event (manual range) for removed Toggl entry ID:${record_id}`);
         }
+      } catch (e) {
+        log(LOG_LEVELS.ERROR, `Error checking/deleting entry ID:${record_id} - ${e}`);
       }
-    });
-  }, CONFIG.RETRY_COUNT, CONFIG.RETRY_DELAY);
+    }
+  });
 }
 
 /**
