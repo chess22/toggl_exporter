@@ -576,8 +576,13 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
       log(LOG_LEVELS.ERROR, "タイムエントリの取得に失敗しました");
       return;
     }
-    log(LOG_LEVELS.INFO, "Number of time entries fetched: " + timeEntries.length);
-    const totalCount = timeEntries.length;
+    const timeEntriesSorted = timeEntries.slice().sort(function(a, b) {
+      const aStop = a && a.stop ? new Date(a.stop).getTime() : Number.POSITIVE_INFINITY;
+      const bStop = b && b.stop ? new Date(b.stop).getTime() : Number.POSITIVE_INFINITY;
+      return aStop - bStop;
+    });
+    log(LOG_LEVELS.INFO, "Number of time entries fetched: " + timeEntriesSorted.length);
+    const totalCount = timeEntriesSorted.length;
     log(LOG_LEVELS.INFO, "Total records to process: " + totalCount);
     if (totalCount === 0) {
       props.deleteProperty(PROGRESS_KEY);
@@ -587,19 +592,33 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
 
     // 前回中断時のレコードIDから再開位置を特定
     let startIndex = 0;
+    let foundLastProcessed = false;
     if (lastProcessedId) {
       for (let j = 0; j < totalCount; j++) {
-        if (String(timeEntries[j].id) === lastProcessedId) {
+        if (String(timeEntriesSorted[j].id) === lastProcessedId) {
           startIndex = j + 1;
+          foundLastProcessed = true;
           break;
         }
       }
       log(LOG_LEVELS.INFO, "Resuming from index " + startIndex + " (after record ID:" + lastProcessedId + ")");
     }
+    if (lastProcessedId && !foundLastProcessed && lastModify > 0) {
+      for (let j = 0; j < totalCount; j++) {
+        const record = timeEntriesSorted[j];
+        if (!record.stop) continue;
+        const stop_time = Math.floor(new Date(record.stop).getTime() / 1000);
+        if (stop_time > lastModify) {
+          startIndex = j;
+          break;
+        }
+      }
+      log(LOG_LEVELS.INFO, "Last processed ID not found. Fallback resume index: " + startIndex + " (lastModify: " + lastModify + ")");
+    }
     log(LOG_LEVELS.INFO, "Processing starts from index " + startIndex + " at " + new Date().toISOString());
 
     for (let i = startIndex; i < totalCount; i++) {
-      const record = timeEntries[i];
+      const record = timeEntriesSorted[i];
       if (!record.stop) {
         log(LOG_LEVELS.DEBUG, "Record with no stop time: " + JSON.stringify(record));
         continue;

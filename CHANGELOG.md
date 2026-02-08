@@ -5,6 +5,8 @@
 ### Fixed / 修正
 - **空データ時のlastModify更新を抑止**: 取得件数0件のときに `timestamp=0` が保存される問題を修正
   (Avoid updating lastModify when there are zero entries to prevent saving `timestamp=0`)
+- **再開位置のフォールバックを追加**: 前回レコードIDが見つからない場合、`lastModify` で再開位置を推定
+  (Added resume fallback using `lastModify` when the last processed record ID is missing)
 
 ---
 
