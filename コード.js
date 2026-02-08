@@ -406,29 +406,32 @@ function deleteRemovedEntriesManual() {
 
 /**
  * 重複イベントを削除する (過去3ヶ月)
- * - 同じIDを持つ複数イベントがある場合、最新以外を削除
+ * - 同じIDを持つ複数イベントがある場合、最新（最後に登録された）もの以外を削除
+ * - getEventsは時系列順で返すため、後に出現するものが最新
  */
 function removeDuplicateEvents() {
-  return retry(() => {
-    const calendar = CalendarApp.getCalendarById(CONFIG.GOOGLE_CALENDAR_ID);
-    const now = new Date();
-    const pastDate = new Date(now.getFullYear(), now.getMonth() - 3, now.getDate());
-    const events = calendar.getEvents(pastDate, now);
-    const eventMap = {};
-    events.forEach(function(event) {
-      const title = event.getTitle();
-      const match = title.match(/ID:(\d+)$/);
-      if (match && match[1]) {
-        const record_id = match[1];
-        if (eventMap[record_id]) {
-          event.deleteEvent();
-          log(LOG_LEVELS.INFO, `Deleted duplicate event for ID:${record_id}`);
-        } else {
-          eventMap[record_id] = event;
+  const calendar = CalendarApp.getCalendarById(CONFIG.GOOGLE_CALENDAR_ID);
+  const now = new Date();
+  const pastDate = new Date(now.getFullYear(), now.getMonth() - 3, now.getDate());
+  const events = calendar.getEvents(pastDate, now);
+  const eventMap = {};
+  events.forEach(function(event) {
+    const title = event.getTitle();
+    const match = title.match(/ID:(\d+)$/);
+    if (match && match[1]) {
+      const record_id = match[1];
+      if (eventMap[record_id]) {
+        // 古い方（先に登録されたもの）を削除し、最新を保持
+        try {
+          eventMap[record_id].deleteEvent();
+          log(LOG_LEVELS.INFO, `Deleted older duplicate event for ID:${record_id}`);
+        } catch (e) {
+          log(LOG_LEVELS.ERROR, `Error deleting duplicate event for ID:${record_id} - ${e}`);
         }
       }
-    });
-  }, CONFIG.RETRY_COUNT, CONFIG.RETRY_DELAY);
+      eventMap[record_id] = event;
+    }
+  });
 }
 
 /**
