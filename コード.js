@@ -258,7 +258,7 @@ function eventExistsAndUpdate(record_id, newRecord) {
       const newStart = newRecord.start;
       const newEnd = newRecord.stop;
       
-      const project_data = getProjectData(newRecord.wid, newRecord.pid);
+      const project_data = getProjectData(newRecord.workspace_id, newRecord.project_id);
       const project_name = project_data.name || '';
       const updatedTitle = [(newRecord.description || '名称なし'), project_name]
         .filter(Boolean).join(" : ") + ` ID:${record_id}`;
@@ -589,7 +589,7 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
       
       try {
         if (!eventExistsAndUpdate(record.id, record)) {
-          var project_data = getProjectData(record.wid, record.pid);
+          var project_data = getProjectData(record.workspace_id, record.project_id);
           var project_name = project_data.name || '';
           var activity_log = [(record.description || '名称なし'), project_name]
             .filter(Boolean).join(" : ") + " ID:" + record.id;
