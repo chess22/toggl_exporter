@@ -176,7 +176,7 @@ function getTimeEntriesRange(startIso, endIso) {
     const responseCode = response.getResponseCode();
     const responseText = response.getContentText();
     log(LOG_LEVELS.DEBUG, `API Response Code: ${responseCode}`);
-    log(LOG_LEVELS.DEBUG, `API Response: ${responseText}`);
+    log(LOG_LEVELS.DEBUG, `API Response (first 1000 chars): ${responseText.slice(0, 1000)}`);
     
     if (responseCode !== 200) {
       log(LOG_LEVELS.ERROR, `API Error: ${responseText}`);
@@ -313,7 +313,7 @@ function getProjectData(workspace_id, project_id) {
     const responseCode = response.getResponseCode();
     const responseText = response.getContentText();
     log(LOG_LEVELS.DEBUG, `Project API Response Code: ${responseCode}`);
-    log(LOG_LEVELS.DEBUG, `Project API Response: ${responseText}`);
+    log(LOG_LEVELS.DEBUG, `Project API Response (first 1000 chars): ${responseText.slice(0, 1000)}`);
     
     if (responseCode !== 200) {
       log(LOG_LEVELS.ERROR, `Project API Error: ${responseText}`);
