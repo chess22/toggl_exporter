@@ -555,7 +555,7 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
 
   // 必須設定の事前チェック
   if (!CONFIG.TOGGL_BASIC_AUTH) {
-    log(LOG_LEVELS.ERROR, "TOGGL_BASIC_AUTH が未設定です。スクリプトプロパティに '{API_TOKEN}:api_token' 形式で設定してください。");
+    log(LOG_LEVELS.ERROR, "TOGGL_BASIC_AUTH が未設定です。スクリプトプロパティに '{API_TOKEN}:api_token' をBase64エンコードした値を設定してください。");
     throw new Error("TOGGL_BASIC_AUTH is not configured in Script Properties");
   }
   if (!CONFIG.GOOGLE_CALENDAR_ID) {
