@@ -63,7 +63,7 @@ This project is a Google Apps Script based on Masato Kawaguchi's [Toggl Exporter
    ```bash
    git clone https://github.com/<your-username>/toggl_exporter.git
    cd toggl_exporter
-```
+   ```
 
 2. **clasp / Google Apps Script の準備 / Setup clasp / Google Apps Script**
 
