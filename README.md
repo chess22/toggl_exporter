@@ -77,7 +77,7 @@ clasp clone <YOUR_SCRIPT_ID>
 
 3. **スクリプトプロパティの設定 / Set Script Properties**
 
-• TOGGL_BASIC_AUTH: Toggl API トークン（平文で `{API_TOKEN}:api_token` 形式。コード側でBase64エンコードします）
+• TOGGL_BASIC_AUTH: Toggl API トークン（Base64エンコード済みの値を設定。`{API_TOKEN}:api_token` をBase64エンコードした文字列）
 
 • GOOGLE_CALENDAR_ID: 同期先の Google カレンダー ID
 
