@@ -647,8 +647,7 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
       }
 
       const stop_time = Math.floor(new Date(record.stop).getTime() / 1000);
-      const start_time = Math.floor(new Date(record.start).getTime() / 1000);
-      if (isNaN(stop_time) || isNaN(start_time)) {
+      if (isNaN(stop_time) || isNaN(new Date(record.start).getTime())) {
         log(LOG_LEVELS.DEBUG, "Invalid time for record: " + JSON.stringify(record));
         continue;
       }
