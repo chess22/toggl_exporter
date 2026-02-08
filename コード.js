@@ -34,6 +34,9 @@ const CONFIG = {
   MANUAL_TIMEOUT_MODE_INTERVAL: 60000           // 手動タイムアウトモード：1分
 };
 
+// 実行内のプロジェクト取得をメモ化
+const PROJECT_CACHE = {};
+
 /** ログレベル **/
 const LOG_LEVELS = {
   DEBUG: 1,
@@ -301,6 +304,10 @@ function eventExistsAndUpdate(record_id, newRecord) {
  */
 function getProjectData(workspace_id, project_id) {
   if (!workspace_id || !project_id) return {};
+  const cacheKey = `${workspace_id}:${project_id}`;
+  if (Object.prototype.hasOwnProperty.call(PROJECT_CACHE, cacheKey)) {
+    return PROJECT_CACHE[cacheKey];
+  }
   return retry(() => {
     const uri = `${CONFIG.TOGGL_API_HOSTNAME}/api/v9/workspaces/${workspace_id}/projects/${project_id}`;
     
@@ -320,7 +327,9 @@ function getProjectData(workspace_id, project_id) {
       return {};
     }
     
-    return JSON.parse(responseText);
+    const parsed = JSON.parse(responseText);
+    PROJECT_CACHE[cacheKey] = parsed;
+    return parsed;
   }, CONFIG.RETRY_COUNT, CONFIG.RETRY_DELAY);
 }
 

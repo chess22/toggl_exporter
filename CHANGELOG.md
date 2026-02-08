@@ -7,6 +7,8 @@
   (Avoid updating lastModify when there are zero entries to prevent saving `timestamp=0`)
 - **再開位置のフォールバックを追加**: 前回レコードIDが見つからない場合、`lastModify` で再開位置を推定
   (Added resume fallback using `lastModify` when the last processed record ID is missing)
+- **プロジェクト情報取得をメモ化**: 同一プロジェクトへのAPI呼び出しを削減
+  (Memoized project lookups to reduce duplicate API calls)
 
 ---
 
