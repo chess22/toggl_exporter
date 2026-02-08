@@ -468,15 +468,15 @@ function clearScriptCache() {
  */
 function testCreateDuplicateEvents() {
   try {
-    var now = new Date();
-    var oneHourLater = new Date(now.getTime() + 60 * 60 * 1000);
-    var twoHoursLater = new Date(now.getTime() + 2 * 60 * 60 * 1000);
-    var title = "テストイベント ID:654321";
-    
+    const now = new Date();
+    const oneHourLater = new Date(now.getTime() + 60 * 60 * 1000);
+    const twoHoursLater = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+    const title = "テストイベント ID:654321";
+
     recordActivityLog(title, oneHourLater.toISOString(), twoHoursLater.toISOString());
-    
-    var threeHoursLater = new Date(now.getTime() + 3 * 60 * 60 * 1000);
-    var fourHoursLater  = new Date(now.getTime() + 4 * 60 * 60 * 1000);
+
+    const threeHoursLater = new Date(now.getTime() + 3 * 60 * 60 * 1000);
+    const fourHoursLater  = new Date(now.getTime() + 4 * 60 * 60 * 1000);
     recordActivityLog(title, threeHoursLater.toISOString(), fourHoursLater.toISOString());
     
     log(LOG_LEVELS.INFO, "重複イベント作成テスト成功");
@@ -537,25 +537,25 @@ const PROGRESS_KEY = 'toggl_exporter:last_processed_record_id';
  */
 function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
   forceInitial = forceInitial || false;
-  
+
   // ロックを取得（同時実行防止）
-  let lock = getLock();
+  const lock = getLock();
   try {
     // モード別タイムアウト閾値の設定（ミリ秒）
-    var MAX_EXECUTION_TIME;
+    let MAX_EXECUTION_TIME;
     if (isManual) {
       MAX_EXECUTION_TIME = autoResume ? CONFIG.MANUAL_COMPLETE_TIMEOUT_INTERVAL : CONFIG.MANUAL_TIMEOUT_MODE_INTERVAL;
     } else {
       MAX_EXECUTION_TIME = CONFIG.AUTOMATIC_TIMEOUT_INTERVAL;
     }
-    
-    var startTime = new Date().getTime();
-    var props = PropertiesService.getScriptProperties();
-    var lastProcessedId = props.getProperty(PROGRESS_KEY) || null;
 
-    var lastModify = forceInitial ? -1 : getLastModifyDatetime();
-    var now = new Date();
-    var startDate;
+    const startTime = new Date().getTime();
+    const props = PropertiesService.getScriptProperties();
+    const lastProcessedId = props.getProperty(PROGRESS_KEY) || null;
+
+    let lastModify = forceInitial ? -1 : getLastModifyDatetime();
+    const now = new Date();
+    let startDate;
     if (lastModify === -1) {
       startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
       log(LOG_LEVELS.INFO, "初回実行: 過去30日分のデータを取得します");
@@ -563,23 +563,23 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
       startDate = new Date((lastModify - 24 * 60 * 60) * 1000);
       log(LOG_LEVELS.INFO, "継続実行: キャッシュのタイムスタンプに基づいてデータ取得を行います");
     }
-    
-    var startIso = startDate.toISOString();
-    var endIso = now.toISOString();
-    
-    var timeEntries = getTimeEntriesRange(startIso, endIso);
+
+    const startIso = startDate.toISOString();
+    const endIso = now.toISOString();
+
+    const timeEntries = getTimeEntriesRange(startIso, endIso);
     if (!timeEntries) {
       log(LOG_LEVELS.ERROR, "タイムエントリの取得に失敗しました");
       return;
     }
     log(LOG_LEVELS.INFO, "Number of time entries fetched: " + timeEntries.length);
-    var totalCount = timeEntries.length;
+    const totalCount = timeEntries.length;
     log(LOG_LEVELS.INFO, "Total records to process: " + totalCount);
 
     // 前回中断時のレコードIDから再開位置を特定
-    var startIndex = 0;
+    let startIndex = 0;
     if (lastProcessedId) {
-      for (var j = 0; j < totalCount; j++) {
+      for (let j = 0; j < totalCount; j++) {
         if (String(timeEntries[j].id) === lastProcessedId) {
           startIndex = j + 1;
           break;
@@ -589,25 +589,25 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
     }
     log(LOG_LEVELS.INFO, "Processing starts from index " + startIndex + " at " + new Date().toISOString());
 
-    for (var i = startIndex; i < totalCount; i++) {
-      var record = timeEntries[i];
+    for (let i = startIndex; i < totalCount; i++) {
+      const record = timeEntries[i];
       if (!record.stop) {
         log(LOG_LEVELS.DEBUG, "Record with no stop time: " + JSON.stringify(record));
         continue;
       }
-      
-      var stop_time = Math.floor(new Date(record.stop).getTime() / 1000);
-      var start_time = Math.floor(new Date(record.start).getTime() / 1000);
+
+      const stop_time = Math.floor(new Date(record.stop).getTime() / 1000);
+      const start_time = Math.floor(new Date(record.start).getTime() / 1000);
       if (isNaN(stop_time) || isNaN(start_time)) {
         log(LOG_LEVELS.DEBUG, "Invalid time for record: " + JSON.stringify(record));
         continue;
       }
-      
+
       try {
         if (!eventExistsAndUpdate(record.id, record)) {
-          var project_data = getProjectData(record.workspace_id, record.project_id);
-          var project_name = project_data.name || '';
-          var activity_log = [(record.description || '名称なし'), project_name]
+          const project_data = getProjectData(record.workspace_id, record.project_id);
+          const project_name = project_data.name || '';
+          const activity_log = [(record.description || '名称なし'), project_name]
             .filter(Boolean).join(" : ") + " ID:" + record.id;
           recordActivityLog(activity_log, record.start, record.stop);
           log(LOG_LEVELS.INFO, "Added event: " + activity_log);
@@ -618,17 +618,17 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
         log(LOG_LEVELS.ERROR, "Error processing record ID:" + record.id + " - " + e);
         notifyError(e, record.id);
       }
-      
+
       if (stop_time > lastModify) {
         lastModify = stop_time;
       }
-      
-      var elapsed = new Date().getTime() - startTime;
+
+      const elapsed = new Date().getTime() - startTime;
       if (elapsed > MAX_EXECUTION_TIME) {
         props.setProperty(PROGRESS_KEY, String(record.id));
-        var processedCount = i + 1;
-        var percentComplete = Math.floor((processedCount / totalCount) * 100);
-        var remainingCount = totalCount - processedCount;
+        const processedCount = i + 1;
+        const percentComplete = Math.floor((processedCount / totalCount) * 100);
+        const remainingCount = totalCount - processedCount;
         log(LOG_LEVELS.INFO, "Timeout reached: Processed " + processedCount + " of " + totalCount +
             " (" + percentComplete + "%). Remaining: " + remainingCount +
             " records. Current record's stop date: " + record.stop);
