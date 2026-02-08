@@ -523,7 +523,8 @@ function testDuplicateEventsWorkflow() {
  */
 
 // 進捗管理用のキー（Script Properties を利用）
-const PROGRESS_KEY = 'toggl_exporter:last_processed_index';
+// 最後に処理したレコードIDで再開位置を特定（インデックスだとデータ変動時にずれるため）
+const PROGRESS_KEY = 'toggl_exporter:last_processed_record_id';
 
 /**
  * バッチ処理のコア関数
@@ -547,8 +548,8 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
     
     var startTime = new Date().getTime();
     var props = PropertiesService.getScriptProperties();
-    var lastIndex = parseInt(props.getProperty(PROGRESS_KEY)) || 0;
-    
+    var lastProcessedId = props.getProperty(PROGRESS_KEY) || null;
+
     var lastModify = forceInitial ? -1 : getLastModifyDatetime();
     var now = new Date();
     var startDate;
@@ -571,9 +572,21 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
     log(LOG_LEVELS.INFO, "Number of time entries fetched: " + timeEntries.length);
     var totalCount = timeEntries.length;
     log(LOG_LEVELS.INFO, "Total records to process: " + totalCount);
-    log(LOG_LEVELS.INFO, "Processing starts from index " + lastIndex + " at " + new Date().toISOString());
-    
-    for (var i = lastIndex; i < totalCount; i++) {
+
+    // 前回中断時のレコードIDから再開位置を特定
+    var startIndex = 0;
+    if (lastProcessedId) {
+      for (var j = 0; j < totalCount; j++) {
+        if (String(timeEntries[j].id) === lastProcessedId) {
+          startIndex = j + 1;
+          break;
+        }
+      }
+      log(LOG_LEVELS.INFO, "Resuming from index " + startIndex + " (after record ID:" + lastProcessedId + ")");
+    }
+    log(LOG_LEVELS.INFO, "Processing starts from index " + startIndex + " at " + new Date().toISOString());
+
+    for (var i = startIndex; i < totalCount; i++) {
       var record = timeEntries[i];
       if (!record.stop) {
         log(LOG_LEVELS.DEBUG, "Record with no stop time: " + JSON.stringify(record));
@@ -609,7 +622,7 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
       
       var elapsed = new Date().getTime() - startTime;
       if (elapsed > MAX_EXECUTION_TIME) {
-        props.setProperty(PROGRESS_KEY, i + 1);
+        props.setProperty(PROGRESS_KEY, String(record.id));
         var processedCount = i + 1;
         var percentComplete = Math.floor((processedCount / totalCount) * 100);
         var remainingCount = totalCount - processedCount;
@@ -618,7 +631,7 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
             " records. Current record's stop date: " + record.stop);
         
         if (!isManual || (isManual && autoResume)) {
-          log(LOG_LEVELS.INFO, (isManual ? "手動完遂" : "自動実行") + ": 閾値に達したため中断します。Next start index: " + (i + 1));
+          log(LOG_LEVELS.INFO, (isManual ? "手動完遂" : "自動実行") + ": 閾値に達したため中断します。Last processed record ID: " + record.id);
           // 既存のワンタイムトリガーを削除してから新規作成（トリガー蓄積防止）
           ScriptApp.getProjectTriggers().forEach(function(trigger) {
             if (trigger.getHandlerFunction() === 'watch' &&
