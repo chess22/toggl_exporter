@@ -615,6 +615,13 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
         
         if (!isManual || (isManual && autoResume)) {
           log(LOG_LEVELS.INFO, (isManual ? "手動完遂" : "自動実行") + ": 閾値に達したため中断します。Next start index: " + (i + 1));
+          // 既存のワンタイムトリガーを削除してから新規作成（トリガー蓄積防止）
+          ScriptApp.getProjectTriggers().forEach(function(trigger) {
+            if (trigger.getHandlerFunction() === 'watch' &&
+                trigger.getTriggerSource() === ScriptApp.TriggerSource.CLOCK) {
+              ScriptApp.deleteTrigger(trigger);
+            }
+          });
           ScriptApp.newTrigger('watch')
             .timeBased()
             .after(1000)
