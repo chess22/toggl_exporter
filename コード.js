@@ -52,6 +52,27 @@ function log(level, message) {
 }
 
 /**
+ * エラー通知用関数
+ * 設定されたメールアドレスにエラー内容を送信する
+ * NOTIFICATION_EMAIL が未設定の場合はログ出力のみ
+ */
+function notifyError(error, recordId) {
+  const email = CONFIG.NOTIFICATION_EMAIL;
+  const subject = 'toggl_exporter エラー通知';
+  const body = `エラーが発生しました。\n\nRecord ID: ${recordId || 'N/A'}\nError: ${error}\n\n時刻: ${new Date().toISOString()}`;
+  if (email) {
+    try {
+      MailApp.sendEmail(email, subject, body);
+      log(LOG_LEVELS.INFO, `Error notification sent to: ${email}`);
+    } catch (mailError) {
+      log(LOG_LEVELS.ERROR, `Failed to send error notification: ${mailError}`);
+    }
+  } else {
+    log(LOG_LEVELS.ERROR, `notifyError called but NOTIFICATION_EMAIL is not configured. Error: ${error}`);
+  }
+}
+
+/**
  * ロックを取得する関数（最大30秒待機）
  */
 function getLock() {
