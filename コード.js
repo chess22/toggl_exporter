@@ -553,6 +553,16 @@ const PROGRESS_KEY = 'toggl_exporter:last_processed_record_id';
 function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
   forceInitial = forceInitial || false;
 
+  // 必須設定の事前チェック
+  if (!CONFIG.TOGGL_BASIC_AUTH) {
+    log(LOG_LEVELS.ERROR, "TOGGL_BASIC_AUTH が未設定です。スクリプトプロパティに '{API_TOKEN}:api_token' 形式で設定してください。");
+    throw new Error("TOGGL_BASIC_AUTH is not configured in Script Properties");
+  }
+  if (!CONFIG.GOOGLE_CALENDAR_ID) {
+    log(LOG_LEVELS.ERROR, "GOOGLE_CALENDAR_ID が未設定です。スクリプトプロパティに設定してください。");
+    throw new Error("GOOGLE_CALENDAR_ID is not configured in Script Properties");
+  }
+
   // ロックを取得（同時実行防止）
   const lock = getLock();
   try {
