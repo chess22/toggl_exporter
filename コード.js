@@ -630,6 +630,11 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
             " (" + percentComplete + "%). Remaining: " + remainingCount +
             " records. Current record's stop date: " + record.stop);
         
+        // タイムアウト中断時もlastModifyを保存し、次回取得範囲を最新化
+        if (lastModify > 0) {
+          putLastModifyDatetime(lastModify);
+        }
+
         if (!isManual || (isManual && autoResume)) {
           log(LOG_LEVELS.INFO, (isManual ? "手動完遂" : "自動実行") + ": 閾値に達したため中断します。Last processed record ID: " + record.id);
           // 既存のワンタイムトリガーを削除してから新規作成（トリガー蓄積防止）
