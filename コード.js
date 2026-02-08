@@ -172,20 +172,20 @@ function getTimeEntriesRange(startIso, endIso) {
     
     const response = UrlFetchApp.fetch(uri, {
       method: 'GET',
-      headers: { "Authorization": "Basic " + Utilities.base64Encode(CONFIG.TOGGL_BASIC_AUTH) },
+      headers: { "Authorization": "Basic " + CONFIG.TOGGL_BASIC_AUTH },
       muteHttpExceptions: true
     });
-    
+
     const responseCode = response.getResponseCode();
     const responseText = response.getContentText();
     log(LOG_LEVELS.DEBUG, `API Response Code: ${responseCode}`);
     log(LOG_LEVELS.DEBUG, `API Response (first 1000 chars): ${responseText.slice(0, 1000)}`);
-    
+
     if (responseCode !== 200) {
       log(LOG_LEVELS.ERROR, `API Error: ${responseText}`);
       throw new Error(`Toggl API returned status code ${responseCode}`);
     }
-    
+
     const parsed = JSON.parse(responseText);
     if (Array.isArray(parsed)) {
       return parsed;
@@ -313,10 +313,10 @@ function getProjectData(workspace_id, project_id) {
     
     const response = UrlFetchApp.fetch(uri, {
       method: 'GET',
-      headers: { "Authorization": "Basic " + Utilities.base64Encode(CONFIG.TOGGL_BASIC_AUTH) },
+      headers: { "Authorization": "Basic " + CONFIG.TOGGL_BASIC_AUTH },
       muteHttpExceptions: true
     });
-    
+
     const responseCode = response.getResponseCode();
     const responseText = response.getContentText();
     log(LOG_LEVELS.DEBUG, `Project API Response Code: ${responseCode}`);
@@ -341,7 +341,7 @@ function checkIfTogglEntryExists(record_id) {
     const uri = `${CONFIG.TOGGL_API_HOSTNAME}/api/v9/me/time_entries/${record_id}`;
     const response = UrlFetchApp.fetch(uri, {
       method: 'GET',
-      headers: { "Authorization": "Basic " + Utilities.base64Encode(CONFIG.TOGGL_BASIC_AUTH) },
+      headers: { "Authorization": "Basic " + CONFIG.TOGGL_BASIC_AUTH },
       muteHttpExceptions: true
     });
     const responseCode = response.getResponseCode();
