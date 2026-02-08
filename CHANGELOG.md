@@ -19,10 +19,18 @@
   (Save lastModify cache on timeout to correctly update the next fetch start position)
 - **`removeDuplicateEvents` で最新イベントを残すように修正**: コメントと挙動の不一致を解消
   (Fixed `removeDuplicateEvents` to keep the latest event, matching the JSDoc description)
+- **`eventExistsAndUpdate` の時間比較をミリ秒ベースに変更**: `toISOString()` の文字列比較ではタイムゾーン表記差（Z vs +09:00）で毎回不要な更新が発生していた
+  (Changed time comparison from `toISOString()` string matching to `getTime()` millisecond comparison)
+- **タイムアウト再開を `watchResume` 関数に分離**: 定期実行の `watch` トリガーが巻き添え削除される問題を防止
+  (Separated timeout resume into `watchResume` function to protect user's periodic `watch` trigger)
+- **DEBUGログのAPIレスポンス出力を先頭1000文字に制限**: 大量データ取得時のログ肥大化を防止
+  (Limited API response debug logging to first 1000 characters)
 
 ### Changed / 変更
 - **`var` を `const`/`let` に統一**: V8ランタイムのブロックスコープを活用
   (Unified variable declarations to `const`/`let` for V8 runtime block scoping)
+- **READMEの `TOGGL_BASIC_AUTH` 説明を修正**: 「Base64認証情報」→「平文 `{API_TOKEN}:api_token` 形式」に統一
+  (Updated README to clarify TOGGL_BASIC_AUTH should be stored in plaintext format)
 
 ---
 
