@@ -264,8 +264,12 @@ function eventExistsAndUpdate(record_id, newRecord) {
         .filter(Boolean).join(" : ") + ` ID:${record_id}`;
       
       const eventTitleNeedsUpdate = (matchingEvent.getTitle() !== updatedTitle);
-      const eventTimeNeedsUpdate = (matchingEvent.getStartTime().toISOString() !== newStart) ||
-                                     (matchingEvent.getEndTime().toISOString() !== newEnd);
+      // ミリ秒で比較（toISOString()だとタイムゾーン表記差 Z vs +09:00 で不一致になるため）
+      const newStartDate = new Date(newStart);
+      const newEndDate = new Date(newEnd);
+      const eventTimeNeedsUpdate =
+        matchingEvent.getStartTime().getTime() !== newStartDate.getTime() ||
+        matchingEvent.getEndTime().getTime() !== newEndDate.getTime();
       
       log(LOG_LEVELS.DEBUG, `EventTitleNeedsUpdate: ${eventTitleNeedsUpdate}, EventTimeNeedsUpdate: ${eventTimeNeedsUpdate}`);
       
