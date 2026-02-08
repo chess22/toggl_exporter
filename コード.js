@@ -324,9 +324,10 @@ function getProjectData(workspace_id, project_id) {
     
     if (responseCode !== 200) {
       log(LOG_LEVELS.ERROR, `Project API Error: ${responseText}`);
+      PROJECT_CACHE[cacheKey] = {};
       return {};
     }
-    
+
     const parsed = JSON.parse(responseText);
     PROJECT_CACHE[cacheKey] = parsed;
     return parsed;
