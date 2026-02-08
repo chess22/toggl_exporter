@@ -472,7 +472,9 @@ function sendTestEmail() {
 function clearScriptCache() {
   const cache = CacheService.getScriptCache();
   cache.remove(CONFIG.CACHE_KEY);
-  log(LOG_LEVELS.INFO, "Cache cleared");
+  const props = PropertiesService.getScriptProperties();
+  props.deleteProperty(CONFIG.CACHE_KEY);
+  log(LOG_LEVELS.INFO, "Cache cleared (CacheService + ScriptProperties)");
   SpreadsheetApp.getUi().alert("キャッシュをクリアしました。");
 }
 
