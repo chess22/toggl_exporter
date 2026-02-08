@@ -169,7 +169,7 @@ function getTimeEntriesRange(startIso, endIso) {
     
     const response = UrlFetchApp.fetch(uri, {
       method: 'GET',
-      headers: { "Authorization": "Basic " + CONFIG.TOGGL_BASIC_AUTH },
+      headers: { "Authorization": "Basic " + Utilities.base64Encode(CONFIG.TOGGL_BASIC_AUTH) },
       muteHttpExceptions: true
     });
     
@@ -302,7 +302,7 @@ function getProjectData(workspace_id, project_id) {
     
     const response = UrlFetchApp.fetch(uri, {
       method: 'GET',
-      headers: { "Authorization": "Basic " + CONFIG.TOGGL_BASIC_AUTH },
+      headers: { "Authorization": "Basic " + Utilities.base64Encode(CONFIG.TOGGL_BASIC_AUTH) },
       muteHttpExceptions: true
     });
     
@@ -328,7 +328,7 @@ function checkIfTogglEntryExists(record_id) {
     const uri = `${CONFIG.TOGGL_API_HOSTNAME}/api/v9/me/time_entries/${record_id}`;
     const response = UrlFetchApp.fetch(uri, {
       method: 'GET',
-      headers: { "Authorization": "Basic " + CONFIG.TOGGL_BASIC_AUTH },
+      headers: { "Authorization": "Basic " + Utilities.base64Encode(CONFIG.TOGGL_BASIC_AUTH) },
       muteHttpExceptions: true
     });
     const responseCode = response.getResponseCode();
