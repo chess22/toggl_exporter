@@ -18,7 +18,6 @@
 /** CONFIG: 基本設定 **/
 const CONFIG = {
   CACHE_KEY: 'toggl_exporter:lastmodify_datetime',
-  TIME_OFFSET: 9 * 60 * 60, // JST (秒)
   TOGGL_API_HOSTNAME: 'https://api.track.toggl.com',
   GOOGLE_CALENDAR_ID: PropertiesService.getScriptProperties().getProperty('GOOGLE_CALENDAR_ID'),
   NOTIFICATION_EMAIL: PropertiesService.getScriptProperties().getProperty('NOTIFICATION_EMAIL'),
