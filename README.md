@@ -40,7 +40,7 @@ This project is a Google Apps Script based on Masato Kawaguchi's [Toggl Exporter
 
 ## バージョン情報 / Version Info
 
-- **最新バージョン / Latest Version:** 1.4.04 (2026-02-08)
+- **最新バージョン / Latest Version:** 1.4.05 (2026-02-08)
 
 ### 変更点 / Changelog Highlights
 - 初回実行時の分割取得・進捗保存機能を追加  

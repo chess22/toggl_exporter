@@ -3,7 +3,7 @@
   original author: Masato Kawaguchi
   modified by: chess
   Released under the BSD-3-Clause license
-  version: 1.4.04
+  version: 1.4.05
   https://github.com/mkawaguchi/toggl_exporter/blob/master/LICENSE
 
   CHANGELOG:
