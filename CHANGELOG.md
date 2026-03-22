@@ -46,6 +46,7 @@
   (Replaced deprecated `pid`/`wid` fields with `project_id`/`workspace_id` for Toggl API v9)
 - **Basic認証のBase64エンコード復元**: `Utilities.base64Encode()` が欠落しており認証が失敗する可能性があった
   (Restored `Utilities.base64Encode()` for proper Basic authentication)
+  **注: v1.4.05 で「スクリプトプロパティにBase64済みの値を設定する」運用に変更され、この修正は撤回されました**
 - **進捗管理をレコードIDベースに変更**: 配列インデックスだとデータ変動時にずれるため、record.idで再開位置を特定
   (Changed progress tracking from array index to record ID for reliable resume after timeout)
 - **タイムアウト中断時にもlastModifyキャッシュを保存**: 次回の取得開始位置を適切に更新
