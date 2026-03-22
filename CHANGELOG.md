@@ -1,5 +1,24 @@
 # CHANGELOG
 
+## [1.4.06] - 2026-03-22
+
+### Fixed / 修正
+- **Toggl API 402 / hourly limitエラーへの対応**
+  - `TogglApiError`クラスを追加し、HTTPステータスコードとレスポンス本文を保持するよう変更。
+    (Added `TogglApiError` class to preserve HTTP status code and response body.)
+  - `retry()`をエラー種別対応に変更。hourly limit（402）や一般的な4xxでは短時間リトライせず即時スローするよう改善。
+    (Updated `retry()` to skip retries for hourly limit (402) and general 4xx errors; only retries on 5xx and transient failures.)
+  - `getTimeEntriesRange`/`getProjectData`/`checkIfTogglEntryExists`で`TogglApiError`をスローするよう変更し、レスポンス本文を呼び出し元に伝達可能に。
+    (Changed all Toggl API calls to throw `TogglApiError` with response body, enabling callers to inspect the error detail.)
+  - 定期実行時にhourly limitに到達した場合、通知メールを送信せず当該回をスキップして次回トリガーへ委譲するよう修正。
+    (On scheduled runs, hourly limit errors now skip the current execution silently instead of triggering error notification emails.)
+  - `eventExistsAndUpdate`内の`getProjectData`呼び出しでhourly limitを検知した場合、呼び出し元へ伝播させるよう修正（以前はそのまま素通りして`notifyError`が誤発火していた）。
+    (Fixed `eventExistsAndUpdate` to propagate hourly limit errors from `getProjectData` to the caller instead of swallowing them and triggering false notifications.)
+  - メインループの`catch`でhourly limitを検知した場合は`notifyError`を呼ばず、進捗を保存して即時リターンするよう修正。
+    (Main loop catch now saves progress and returns immediately on hourly limit, without calling `notifyError`.)
+
+---
+
 ## [1.4.05] - 2026-02-08
 
 ### Fixed / 修正

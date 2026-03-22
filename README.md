@@ -40,20 +40,20 @@ This project is a Google Apps Script based on Masato Kawaguchi's [Toggl Exporter
 
 ## バージョン情報 / Version Info
 
-- **最新バージョン / Latest Version:** 1.4.04 (2026-02-08)
+- **最新バージョン / Latest Version:** 1.4.06 (2026-03-22)
 
 ### 変更点 / Changelog Highlights
-- 初回実行時の分割取得・進捗保存機能を追加  
+- **v1.4.06**: Toggl API hourly limit（402）への対応
+  - `TogglApiError`クラスを導入し、`retry()`をエラー種別対応に変更
+  - hourly limit検知時は通知メールを送らずスキップして次回トリガーへ委譲
+- **v1.4.05**: Basic認証の二重エンコード修正、プロジェクト取得のメモ化
+- **v1.4.03**: 初回実行時の分割取得・進捗保存機能を追加
   (Added batch processing with progress saving when timeout occurs.)
-- 手動実行モードを3種類実装：  
-  - タイムアウトモード：1分区切りで中断し、ユーザー再実行で続行  
-  - 完遂モード：タイムアウト閾値を5分30秒に設定し、自動再開する  
-  - 初回実行モード：常に初回実行（保存された進捗を無視）  
-- 全実行モードでロック (LockService) を利用し、排他制御を実現  
+  - タイムアウトモード：1分区切りで中断し、ユーザー再実行で続行
+  - 完遂モード：タイムアウト閾値を5分30秒に設定し、自動再開
+  - 初回実行モード：常に初回実行（保存された進捗を無視）
+  - 全実行モードでロック（LockService）による排他制御
   (All modes acquire a lock to prevent concurrent execution.)
-- 進捗状況のログ出力を、処理開始時、タイムアウト時、完了時に限定  
-- 削除チェック機能およびテスト機能を復元  
-  (Restored deletion checks and test functions.)
 
 ---
 

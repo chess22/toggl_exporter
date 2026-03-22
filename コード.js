@@ -3,10 +3,20 @@
   original author: Masato Kawaguchi
   modified by: chess
   Released under the BSD-3-Clause license
-  version: 1.4.04
+  version: 1.4.06
   https://github.com/mkawaguchi/toggl_exporter/blob/master/LICENSE
 
   CHANGELOG:
+    v1.4.06 (2026/03/22):
+      - eventExistsAndUpdate 内の getProjectData 呼び出しで hourly limit エラーを呼び出し元へ伝播させるよう修正（以前は素通りして notifyError が誤発火していた）
+      - processTimeEntriesBatch のメインループ catch で hourly limit を検知した場合は notifyError を呼ばず、進捗を保存して即時リターンするよう修正
+
+    v1.4.05 (2026/03/22):
+      - Toggl API の 402 / hourly limit を専用エラーで判定するよう修正
+      - retry() をエラー種別対応に変更し、402 / hourly limit や一般的な4xxでは短時間リトライしないよう改善
+      - getTimeEntriesRange / getProjectData / checkIfTogglEntryExists でレスポンス本文付きの API エラーを保持するよう改善
+      - 定期実行時に Toggl API の時間あたり上限へ到達した場合は、通知メール多発を避けるため当該回をスキップして次回トリガーへ委譲するよう改善
+
     v1.4.03 (2025/02/01):
       - 初回実行時の分割取得・進捗保存機能を追加（処理途中の進捗を永続的に Script Properties と一時的な CacheService に保存）
       - 手動実行モードを3種類実装：タイムアウトモード（1分区切りで中断、ユーザー再実行）、完遂モード（自動再開、タイムアウト閾値5分30秒）、初回実行モード（キャッシュ無視）
@@ -52,6 +62,51 @@ function log(level, message) {
   if (level >= CURRENT_LOG_LEVEL) {
     Logger.log(message);
   }
+}
+
+/**
+ * Toggl API 用の詳細エラー
+ */
+class TogglApiError extends Error {
+  constructor(message, statusCode, responseText) {
+    super(message);
+    this.name = 'TogglApiError';
+    this.statusCode = statusCode;
+    this.responseText = responseText || '';
+  }
+}
+
+/**
+ * Toggl API の時間あたり上限到達かを判定
+ */
+function isTogglHourlyLimitError(error) {
+  return (
+    error instanceof TogglApiError &&
+    error.statusCode === 402 &&
+    /hourly limit|quota will reset|API calls/i.test(error.responseText || '')
+  );
+}
+
+/**
+ * API エラーの再試行可否を判定
+ */
+function shouldRetryApiError(error) {
+  if (!(error instanceof TogglApiError)) {
+    return true;
+  }
+  if (isTogglHourlyLimitError(error)) {
+    return false;
+  }
+  if (error.statusCode === 429) {
+    return true;
+  }
+  if (error.statusCode >= 400 && error.statusCode < 500) {
+    return false;
+  }
+  if (error.statusCode >= 500) {
+    return true;
+  }
+  return true;
 }
 
 /**
@@ -152,6 +207,11 @@ function retry(fn, retries = CONFIG.RETRY_COUNT, delay = CONFIG.RETRY_DELAY) {
     try {
       return fn();
     } catch (e) {
+      const retryable = shouldRetryApiError(e);
+      if (!retryable) {
+        log(LOG_LEVELS.INFO, `再試行しないエラー: ${e.message}`);
+        throw e;
+      }
       if (i < retries - 1) {
         log(LOG_LEVELS.DEBUG, `リトライ中 (${i + 1}/${retries}) - エラー: ${e.message}`);
         Utilities.sleep(delay);
@@ -183,7 +243,7 @@ function getTimeEntriesRange(startIso, endIso) {
 
     if (responseCode !== 200) {
       log(LOG_LEVELS.ERROR, `API Error: ${responseText}`);
-      throw new Error(`Toggl API returned status code ${responseCode}`);
+      throw new TogglApiError(`Toggl API returned status code ${responseCode}`, responseCode, responseText);
     }
 
     const parsed = JSON.parse(responseText);
@@ -261,7 +321,14 @@ function eventExistsAndUpdate(record_id, newRecord) {
       const newStart = newRecord.start;
       const newEnd = newRecord.stop;
       
-      const project_data = getProjectData(newRecord.workspace_id, newRecord.project_id);
+      let project_data;
+      try {
+        project_data = getProjectData(newRecord.workspace_id, newRecord.project_id);
+      } catch (e) {
+        if (isTogglHourlyLimitError(e)) throw e; // 呼び出し元（メインループ）へ伝播させる
+        log(LOG_LEVELS.ERROR, `getProjectData error in eventExistsAndUpdate for ID:${record_id} - ${e}`);
+        project_data = {};
+      }
       const project_name = project_data.name || '';
       const updatedTitle = [(newRecord.description || '名称なし'), project_name]
         .filter(Boolean).join(" : ") + ` ID:${record_id}`;
@@ -324,7 +391,7 @@ function getProjectData(workspace_id, project_id) {
     
     if (responseCode !== 200) {
       log(LOG_LEVELS.ERROR, `Project API Error: ${responseText}`);
-      return {};
+      throw new TogglApiError(`Project API returned status code ${responseCode}`, responseCode, responseText);
     }
     
     const parsed = JSON.parse(responseText);
@@ -345,13 +412,14 @@ function checkIfTogglEntryExists(record_id) {
       muteHttpExceptions: true
     });
     const responseCode = response.getResponseCode();
+    const responseText = response.getContentText();
     if (responseCode === 200) {
       return true;
     } else if (responseCode === 404) {
       return false;
     } else {
-      log(LOG_LEVELS.ERROR, `Unexpected API response code when checking entry existence: ${responseCode}`);
-      throw new Error(`Unexpected response code: ${responseCode}`);
+      log(LOG_LEVELS.ERROR, `Unexpected API response when checking entry existence: ${responseText}`);
+      throw new TogglApiError(`Unexpected response code: ${responseCode}`, responseCode, responseText);
     }
   }, CONFIG.RETRY_COUNT, CONFIG.RETRY_DELAY);
 }
@@ -580,7 +648,16 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
     const startIso = startDate.toISOString();
     const endIso = now.toISOString();
 
-    const timeEntries = getTimeEntriesRange(startIso, endIso);
+    let timeEntries;
+    try {
+      timeEntries = getTimeEntriesRange(startIso, endIso);
+    } catch (e) {
+      if (isTogglHourlyLimitError(e)) {
+        log(LOG_LEVELS.INFO, `Toggl API の時間あたり上限に達したため、この回はスキップします。詳細: ${e.responseText}`);
+        return;
+      }
+      throw e;
+    }
     if (!timeEntries) {
       log(LOG_LEVELS.ERROR, "タイムエントリの取得に失敗しました");
       return;
@@ -642,7 +719,16 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
 
       try {
         if (!eventExistsAndUpdate(record.id, record)) {
-          const project_data = getProjectData(record.workspace_id, record.project_id);
+          let project_data = {};
+          try {
+            project_data = getProjectData(record.workspace_id, record.project_id);
+          } catch (projectError) {
+            if (isTogglHourlyLimitError(projectError)) {
+              log(LOG_LEVELS.INFO, `Project API が時間あたり上限に達したため、プロジェクト名なしで継続します。record ID:${record.id}`);
+            } else {
+              throw projectError;
+            }
+          }
           const project_name = project_data.name || '';
           const activity_log = [(record.description || '名称なし'), project_name]
             .filter(Boolean).join(" : ") + " ID:" + record.id;
@@ -652,6 +738,12 @@ function processTimeEntriesBatch(isManual, autoResume, forceInitial) {
           log(LOG_LEVELS.DEBUG, "Existing event processed for ID: " + record.id);
         }
       } catch (e) {
+        if (isTogglHourlyLimitError(e)) {
+          log(LOG_LEVELS.INFO, `Toggl API hourly limit reached mid-loop. Saving progress and stopping. record ID:${record.id}`);
+          props.setProperty(PROGRESS_KEY, String(record.id));
+          if (lastModify > 0) putLastModifyDatetime(lastModify);
+          return;
+        }
         log(LOG_LEVELS.ERROR, "Error processing record ID:" + record.id + " - " + e);
         notifyError(e, record.id);
       }
